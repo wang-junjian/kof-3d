@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# 构建与自检产物：可由 npm run build / npm run verify 复现，不入库。
+# 本地始终保留 kof-3d.html（可离线双击）与 shots/（人工看图用）。
+kof-3d.html
+kof-3d-vrm.html
+shots/
+tests/.build/
+
+# 历史调研素材：只保留在本地磁盘，绝不删除；纯草稿不入库。
+# assets/character.vrm 是 VRM 插槽演示的输入，必须保留。
+assets/candidates/
+assets/art/
+assets/faces/

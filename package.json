@@ -1,0 +1,30 @@
+{
+  "name": "kof-3d",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "原创 3D 格斗垂直切片：Three.js + TypeScript，程序化角色与帧数据驱动",
+  "license": "MIT",
+  "author": "Junjian Wang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wang-junjian/kof-3d.git"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build && node scripts/inline.mjs",
+    "test": "node scripts/bundle-logic.mjs && node --test tests/*.test.mjs",
+    "verify": "node scripts/verify.mjs"
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.180.0",
+    "esbuild": "^0.28.2",
+    "puppeteer-core": "^23.11.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9"
+  }
+}
