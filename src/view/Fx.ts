@@ -194,6 +194,16 @@ export class Fx {
     });
   }
 
+  /** M2 超必杀命中：在常规打击之上叠一层错位火花、放射线与双层柔光，做「贯穿」感。 */
+  superBurst(x: number, y: number, facing: number): void {
+    this.hit(x, y, false, true);
+    this.hit(x + facing * 0.18, y + 0.09, false, true);
+    this.speedLines(x, y, true);
+    this.glow(x, y, true, false);
+    this.glow(x + facing * 0.12, y, false, false);
+    this.arc(x, y, facing, true);
+  }
+
   /** 落地烟尘：贴地压扁的环 + 向两侧滚开的尘团，与落地缓冲同源触发。 */
   dust(x: number): void {
     const puff = new THREE.MeshBasicMaterial({

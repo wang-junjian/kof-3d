@@ -1,5 +1,5 @@
 import { ROUND_SECONDS, type ButtonId } from './frames';
-import type { InputFrame } from './input';
+import { QCF_WINDOW, detectQcf, type InputFrame } from './input';
 import { boxCenterX, boxCenterY, overlaps, separate } from './hitbox';
 import type { AIController } from '../fighter/AI';
 import { Fighter, type HitEvent } from '../fighter/Fighter';
@@ -29,6 +29,8 @@ export class Match {
   private phaseFrames = 0;
   /** 顿帧期间玩家按下的攻击键不丢失，解冻后合并进下一逻辑帧。 */
   private readonly buffered: ButtonId[] = [];
+  /** 236 指令的输入历史（只含真正推进对局的逻辑帧），长度上限 QCF_WINDOW。 */
+  private readonly inputHistory: InputFrame[] = [];
 
   constructor(
     private readonly ai: AIController,
@@ -63,6 +65,7 @@ export class Match {
     this.timerFrames = ROUND_SECONDS * 60;
     this.hitstop = 0;
     this.phaseFrames = 0;
+    this.inputHistory.length = 0; // 摇杆指令不跨回合残留
     this.phase = 'intro';
     this.cb.onRoundStart(n);
   }
@@ -108,7 +111,13 @@ export class Match {
 
     const aiInput = this.ai.decide(this.p2, this.p1);
     this.updateFacing();
-    this.p1.update(input);
+    // 236 指令只在这里识别：intro / roundOver / hitstop 的帧不进输入历史，
+    // 避免跨阶段残留误触发。detectQcf 产出绝对方向，facing 比对在 Fighter 里做。
+    const qcf = detectQcf(this.inputHistory, input);
+    this.inputHistory.push(input);
+    if (this.inputHistory.length > QCF_WINDOW) this.inputHistory.shift();
+    const command: InputFrame = qcf ? { ...input, qcf } : input;
+    this.p1.update(command);
     this.p2.update(aiInput);
     this.resolvePush();
     this.resolveHits();

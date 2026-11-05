@@ -102,6 +102,14 @@ body:not(.started) #hud { opacity: 0; }
   text-shadow: 0 2px 18px rgba(255, 120, 60, 0.45);
 }
 .alert.show { animation: alertpop 0.9s ease-out forwards; }
+.alert.super {
+  /* 必杀的金色环特效很亮，文字上移到其上方，并加一圈深色光晕保证压在特效上仍可读 */
+  top: 30%;
+  color: #c6ff70; letter-spacing: 0.26em;
+  text-shadow:
+    0 0 3px rgba(8, 10, 24, 0.95), 0 2px 6px rgba(8, 10, 24, 0.95),
+    0 0 18px rgba(8, 10, 24, 0.9), 0 0 26px rgba(170, 255, 90, 0.65);
+}
 @keyframes alertpop {
   0% { opacity: 0; transform: translateY(9px) scale(0.94); }
   18% { opacity: 1; transform: none; }
@@ -147,8 +155,10 @@ body:not(.started) #hud { opacity: 0; }
   background: #fff; opacity: 0;
 }
 .screen-flash.tap { animation: flashtap 0.16s ease-out forwards; }
+.screen-flash.super { animation: flashsuper 0.30s ease-out forwards; }
 .screen-flash.ko { animation: flashko 0.44s ease-out forwards; }
 @keyframes flashtap { 0% { opacity: 0.13; } 100% { opacity: 0; } }
+@keyframes flashsuper { 0% { opacity: 0.30; } 100% { opacity: 0; } }
 @keyframes flashko { 0% { opacity: 0.52; } 100% { opacity: 0; } }
 
 .ko-vignette {

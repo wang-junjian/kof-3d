@@ -1,7 +1,7 @@
 import {
   AIR_BUTTON_MOVE, BACK_SPEED, BUTTON_MOVE, GRAVITY, GROUND_FRICTION,
   HURT_AIR, HURT_CROUCH, HURT_STAND, JUMP_VX, JUMP_VY,
-  LANDING_STUN, MAX_HP, MAX_METER, MOVES, WALK_SPEED, moveDuration,
+  LANDING_STUN, MAX_HP, MAX_METER, MOVES, SUPER_COST, WALK_SPEED, moveDuration,
   type HitLevel, type MoveDef, type MoveId,
 } from '../core/frames';
 import type { InputFrame } from '../core/input';
@@ -199,6 +199,13 @@ export class Fighter {
   }
 
   private tryStartMove(input: InputFrame): void {
+    // M2 超必杀：236 必须朝向对手、站在地面、POW 足额。
+    // 任一条件不满足就回退到普通招式——按键绝不吞掉，POW 也一分不扣。
+    if (input.qcf === this.facing && !this.airborne && this.meter >= SUPER_COST) {
+      this.meter -= SUPER_COST;
+      this.startMove('SUPER');
+      return;
+    }
     let id: MoveId = BUTTON_MOVE[input.buttons[0]];
     if (this.airborne) {
       // 空中只允许空中招式，避免落地后仍在挥地面判定框

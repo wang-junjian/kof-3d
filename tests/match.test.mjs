@@ -93,6 +93,64 @@ test('受击打断后清掉旧招式，攻击者招式继续播放（snapshot().
   assert.equal(m.p1.move?.id, 'HP'); // 命中者的招式不应被清理
 });
 
+// ── M2：236 指令在 Match 层的完整链路 ───────────────────────────────
+const F = (o = {}) => ({ ...EMPTY, ...o });
+const readySuper = () => {
+  const { m } = makeMatch();
+  m.phase = 'fight';
+  m.hitstop = 0;
+  m.buffered.length = 0;
+  m.p1.meter = 100;
+  m.p1.x = -0.35;
+  m.p2.x = 0.35;
+  for (const f of [m.p1, m.p2]) {
+    f.state = 'idle'; f.move = null; f.moveFrame = 0; f.stunLeft = 0;
+    f.y = 0; f.vy = 0; f.vx = 0;
+    f.airborne = false; f.guarding = false; f.crouching = false;
+  }
+  return m;
+};
+
+test('236 完整链路：↓↘→ + 攻击键扣除半槽并起 SUPER', () => {
+  const m = readySuper();
+  for (const f of [
+    F({ down: true }), F({ down: true }),
+    F({ down: true, dir: 1 }), F({ down: true, dir: 1 }),
+    F({ dir: 1, buttons: ['HP'] }),
+  ]) m.step(f);
+  assert.equal(m.p1.facing, 1);
+  assert.equal(m.p1.move?.id, 'SUPER');
+  assert.equal(m.p1.meter, 100 - frames.SUPER_COST);
+  assert.equal(m.p1.state, 'attack');
+});
+
+test('236 输入窗口有限：摇完方向后隔太久再按攻击键不触发', () => {
+  const m = readySuper();
+  m.step(F({ down: true }));
+  m.step(F({ down: true, dir: 1 }));
+  for (let i = 0; i < input.QCF_WINDOW + 3; i++) {
+    m.hitstop = 0;
+    m.p1.state = 'idle'; m.p1.move = null; m.p1.stunLeft = 0;
+    m.p2.state = 'idle'; m.p2.move = null;
+    m.step(EMPTY);
+  }
+  m.step(F({ dir: 1, buttons: ['HP'] }));
+  assert.notEqual(m.p1.move?.id, 'SUPER');
+  assert.equal(m.p1.meter, 100, '窗口过期不扣 POW');
+});
+
+test('回合切换清空 236 历史，摇杆输入不跨回合残留', () => {
+  const m = readySuper();
+  m.step(F({ down: true }));
+  m.step(F({ down: true, dir: 1 }));
+  m.restart();
+  m.phase = 'fight';
+  m.p1.meter = 100;
+  m.step(F({ dir: 1, buttons: ['HP'] }));
+  assert.notEqual(m.p1.move?.id, 'SUPER');
+  assert.equal(m.p1.meter, 100);
+});
+
 test('restart 复位到第 1 局、满血、胜场清零', () => {
   const { m, events } = makeMatch();
   m.p1.wins = 2;

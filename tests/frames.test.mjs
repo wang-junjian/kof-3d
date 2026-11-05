@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { frames, hitbox } from './.build/logic.mjs';
 
-const { MOVES, BUTTON_MOVE, AIR_BUTTON_MOVE, moveDuration } = frames;
+const { MOVES, BUTTON_MOVE, AIR_BUTTON_MOVE, moveDuration, SUPER_COST, MAX_METER } = frames;
 
-test('7 个招式帧表自洽：id 对齐、窗口为正、时长等于三段之和', () => {
+test('8 个招式帧表自洽（含 1 个指令必杀）：id 对齐、窗口为正、时长等于三段之和', () => {
   const ids = Object.keys(MOVES);
-  assert.equal(ids.length, 7);
+  assert.equal(ids.length, 8);
   for (const id of ids) {
     const m = MOVES[id];
     assert.equal(m.id, id, `${id} 的 id 字段不一致`);
@@ -59,11 +59,28 @@ test('核心常量守住单局规则：99 秒、满血 100、场地与重力符�
   assert.ok(frames.PUSH_HALF * 2 > 0);
 });
 
-test('轻拳可取消进重拳/重踢，其它招式没有取消窗口', () => {
+test('轻拳可取消进重拳/重踢，其它招式（含必杀）没有取消窗口', () => {
   assert.deepEqual(MOVES.LP.cancelInto, ['HP', 'HK']);
-  for (const id of ['HP', 'LK', 'HK', 'SWEEP', 'JLP', 'JHK']) {
+  for (const id of ['HP', 'LK', 'HK', 'SWEEP', 'JLP', 'JHK', 'SUPER']) {
     assert.deepEqual(MOVES[id].cancelInto, []);
   }
+});
+
+test('236 超必杀：半槽消费、不靠按键直连、伤害与硬直显著高于普通招、自身不攒气', () => {
+  assert.equal(SUPER_COST, 50);
+  assert.equal(SUPER_COST * 2, MAX_METER);
+  assert.equal(BUTTON_MOVE.SUPER, undefined);
+  assert.equal(AIR_BUTTON_MOVE.SUPER, undefined);
+  const s = MOVES.SUPER;
+  assert.equal(s.id, 'SUPER');
+  assert.equal(s.pose, 'super');
+  assert.equal(s.meterGain, 0);
+  assert.equal(s.knockdown, true);
+  assert.equal(s.air, undefined);
+  assert.ok(s.damage > MOVES.HP.damage * 2);
+  assert.ok(s.hitbox.w > MOVES.HP.hitbox.w);
+  assert.ok(s.startup > MOVES.LP.startup);
+  assert.deepEqual(Object.keys(MOVES).filter((id) => MOVES[id].pose === 'super'), ['SUPER']);
 });
 
 test('判定框工具导出齐全且可用（模块图完整性）', () => {

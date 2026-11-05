@@ -30,7 +30,7 @@ const TEMPLATE = `
 <div class="winner" id="winner"></div>
 <div class="ko-vignette" id="ko-vignette"></div>
 <div class="screen-flash" id="screen-flash"></div>
-<div class="hud-bottom">A / D 移动 &nbsp;·&nbsp; W 跳跃 &nbsp;·&nbsp; 按住后方向 站防 &nbsp;·&nbsp; 后 + S 蹲防 &nbsp;·&nbsp; S 蹲下 &nbsp;·&nbsp; J 轻拳 &nbsp;·&nbsp; K 重拳 &nbsp;·&nbsp; L 轻踢 &nbsp;·&nbsp; I 重踢 &nbsp;·&nbsp; S + 踢 扫腿 &nbsp;·&nbsp; 空中攻击键 跳攻 &nbsp;·&nbsp; 1 / 2 / 3 难度</div>
+<div class="hud-bottom">A / D 移动 &nbsp;·&nbsp; W 跳跃 &nbsp;·&nbsp; 按住后方向 站防 &nbsp;·&nbsp; 后 + S 蹲防 &nbsp;·&nbsp; S 蹲下 &nbsp;·&nbsp; J 轻拳 &nbsp;·&nbsp; K 重拳 &nbsp;·&nbsp; L 轻踢 &nbsp;·&nbsp; I 重踢 &nbsp;·&nbsp; S + 踢 扫腿 &nbsp;·&nbsp; 空中攻击键 跳攻 &nbsp;·&nbsp; 1 / 2 / 3 难度 &nbsp;·&nbsp; 236（S → S+前 → 前+攻击）超必杀 · 50 POW</div>
 `;
 
 export class Hud {
@@ -116,8 +116,8 @@ export class Hud {
     el.classList.add('pop');
   }
 
-  /** 'tap' 是重击命中的极轻白闪，'ko' 是终结一击的强闪。 */
-  flash(level: 'tap' | 'ko' | null): void {
+  /** 'tap' 是重击命中的极轻白闪，'super' 是必杀的中闪，'ko' 是终结一击的强闪。 */
+  flash(level: 'tap' | 'super' | 'ko' | null): void {
     if (!level) return;
     this.flashEl.className = 'screen-flash';
     void this.flashEl.offsetWidth;
@@ -131,9 +131,17 @@ export class Hud {
   /** 防御姿势选错时的一行提示，独立于回合公告，不干扰 FIGHT / K.O.。 */
   guardBreak(text: string): void {
     this.setText(this.alertEl, text);
-    this.alertEl.classList.remove('show');
+    this.alertEl.classList.remove('show', 'super');
     void this.alertEl.offsetWidth;
     this.alertEl.classList.add('show');
+  }
+
+  /** M2 超必杀提示：复用 alert 通道，用酸绿高亮区别于橙色 GUARD BREAK。 */
+  superAlert(text: string): void {
+    this.setText(this.alertEl, text);
+    this.alertEl.classList.remove('show', 'super');
+    void this.alertEl.offsetWidth;
+    this.alertEl.classList.add('show', 'super');
   }
 
   announce(text: string): void {
@@ -160,7 +168,7 @@ export class Hud {
     this.setText(this.winnerEl, '');
     this.winnerEl.classList.remove('show');
     this.setText(this.alertEl, '');
-    this.alertEl.classList.remove('show');
+    this.alertEl.classList.remove('show', 'super');
     this.setHtml(this.combo1, '');
     this.setHtml(this.combo2, '');
     this.combo1.classList.remove('pop');

@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import './style.css';
 import { FixedLoop } from './core/loop';
-import { InputBuffer } from './core/input';
+import { InputBuffer, QCF_WINDOW } from './core/input';
 import { Match } from './core/match';
-import { MOVES, type MoveId } from './core/frames';
+import { MOVES, SUPER_COST, type MoveId } from './core/frames';
 import type { FighterState } from './core/state';
 import { AIController, type Difficulty } from './fighter/AI';
 import { createRig, FEI, RIN, type JointName } from './fighter/rig';
@@ -75,6 +75,10 @@ interface KofApi {
   snapshot: () => KofSnapshot;
   match: Match;
   moves: typeof MOVES;
+  /** M2 调参探针：自检从这里读消耗与窗口，避免脚本里硬编码第二份数值。 */
+  config: { superCost: number; qcfWindow: number };
+  /** 调试钩子：冻结逻辑、摆出超必杀发力帧并触发全部专属演出。 */
+  showSuper: () => void;
   /** 切换 AI 难度；同步刷新 HUD 标签。 */
   setDifficulty: (d: Difficulty) => void;
   /** 判定框线框可视化开关（调试用）。 */
@@ -160,20 +164,26 @@ const ai = new AIController();
 const match = new Match(ai, {
   onHit: (e) => {
     hitCount++;
-    const heavy = e.move.damage >= 9;
+    const isSuper = e.move.id === 'SUPER';
+    const heavy = isSuper || e.move.damage >= 9;
     const facing = e.attacker.facing;
     fx.hit(e.x, e.y, e.blocked, heavy, e.guardBreak);
     fx.speedLines(e.x, e.y, heavy);
     fx.glow(e.x, e.y, heavy, e.blocked);
     fx.arc(e.x, e.y, facing, heavy);
+    if (isSuper) {
+      fx.superBurst(e.x, e.y, facing);
+      hud.superAlert('SUPER FINISH');
+      sfx.superMove();
+    }
     if (e.guardBreak) {
       const hint = e.move.level === 'low' ? '下段需蹲防' : '上段需站防';
       hud.guardBreak(`GUARD BREAK · ${hint}`);
     }
-    gameCamera.impact(e.x, heavy ? 0.95 : 0.55);
+    gameCamera.impact(e.x, isSuper ? 1.35 : heavy ? 0.95 : 0.55);
     gameCamera.punch(e.blocked ? 0.10 : heavy ? 0.40 : 0.22);
     hud.combo(e.attacker === match.p1 ? 0 : 1, e.attacker.combo);
-    hud.flash(heavy && !e.blocked && !e.guardBreak ? 'tap' : null);
+    hud.flash(isSuper ? 'super' : heavy && !e.blocked && !e.guardBreak ? 'tap' : null);
     sfx.hit(heavy, e.blocked);
   },
   onRoundStart: () => {
@@ -219,6 +229,7 @@ input.onFirstInteraction = () => {
 let time = 0;
 const prevLanding = [0, 0];
 const prevStrike = [false, false];
+const prevSuper = [false, false];
 const loop = new FixedLoop(
   () => {
     if (poseLock) {
@@ -248,6 +259,13 @@ const loop = new FixedLoop(
           fx.ghost(views[i].ghost?.() ?? null, i === 0 ? 0xff7fb2 : 0x63d5f2, f.facing);
         }
         prevStrike[i] = striking;
+        // M2 超必杀起招：聚气柔光 + 酸绿提示，让「攒满 → 消费」有即时反馈
+        const superActive = f.move?.id === 'SUPER';
+        if (superActive && !prevSuper[i]) {
+          fx.glow(f.x + f.facing * 0.35, 1.15, true, false);
+          hud.superAlert(`${i === 0 ? 'RIN' : 'FEI'} · SUPER`);
+        }
+        prevSuper[i] = superActive;
       }
     }
     gameCamera.update(match.p1.x, match.p2.x);
@@ -352,10 +370,41 @@ const showImpact = (heavy = true): void => {
   hud.flash('tap');
 };
 
+/** 调试：摆出超必杀发力帧并触发全部专属演出，供 09-super.png 与特效断言使用。 */
+const showSuper = (): void => {
+  poseLock = true;
+  const p1 = match.p1;
+  const p2 = match.p2;
+  match.hitstop = 0;
+  match.phase = 'fight';
+  p1.state = 'attack';
+  p1.move = MOVES.SUPER;
+  p1.moveFrame = MOVES.SUPER.startup;
+  p1.stateFrame = MOVES.SUPER.startup;
+  p1.hitId++;
+  p1.x = -0.72; p1.facing = 1; p1.y = 0; p1.vy = 0; p1.vx = 0;
+  p1.airborne = false; p1.flash = 0; p1.combo = 3; p1.comboTimer = 40;
+  p2.state = 'hitstun'; p2.move = null; p2.stunLeft = 30; p2.stateFrame = 0;
+  p2.x = 0.72; p2.y = 0; p2.facing = -1; p2.flash = 0;
+  animators[0].update(p1, time + 1);
+  animators[1].update(p2, time + 1);
+  const x = 0.06;
+  const y = 1.22;
+  fx.hit(x, y, false, true);
+  fx.superBurst(x, y, 1);
+  hud.superAlert('SUPER FINISH');
+  hud.flash('super');
+  hud.combo(0, 3);
+  gameCamera.impact(x, 1.35);
+  if (fx.canGhost()) fx.ghost(views[0].ghost?.() ?? null, 0xff7fb2, 1);
+};
+
 window.__kof = {
   ready: true,
   match,
   moves: MOVES,
+  config: { superCost: SUPER_COST, qcfWindow: QCF_WINDOW },
+  showSuper,
   setDifficulty: (d) => { ai.setDifficulty(d); hud.setDifficulty(d); },
   setDebug: (on) => debug.setEnabled(on),
   setPose,

@@ -92,7 +92,8 @@ check('产物不含 2D 贴图链路（无内联图片 / 无注入数据）',
   `html=${(htmlBytes / 1024).toFixed(0)} KB, injected=${!noFaceData}`);
 check('单文件仍控制在 1 MB 内（可离线双击打开）', htmlBytes < 1024 * 1024,
   `${(htmlBytes / 1024).toFixed(0)} KB`);
-check('HUD 关键文案存在', ['RIN', 'FEI', 'ROUND 1', '99', '轻拳'].every((t) => domText.includes(t)));
+check('HUD 关键文案存在（含 236 超必杀提示）',
+  ['RIN', 'FEI', 'ROUND 1', '99', '轻拳', '236'].every((t) => domText.includes(t)));
 check('逻辑帧已推进', first.frame > 30, `frame=${first.frame}, fps=${first.fps}`);
 check('逻辑步/渲染帧双口径统计可用',
   first.fps > 0 && first.renderFps > 0,
@@ -380,8 +381,12 @@ check('KO 结束回合并记胜场',
   koResult.p2hp === 0 && koResult.wins >= 1 && ['roundOver', 'matchOver'].includes(koResult.phase),
   `phase=${koResult.phase}, wins=${koResult.wins}, steps=${koResult.steps}`);
 
-// KO 特写由 onMatchEnd 同步触发，镜头插值要等渲染帧推进后才能读到
-await sleep(380);
+// KO 特写由 onMatchEnd 同步触发，但 koZoom 按渲染帧插值；headless 帧率有波动，
+// 固定 sleep 会偶发读到「慢推刚起步」的值。与落地烟尘同源：等条件而非等墙钟。
+await page.waitForFunction(
+  () => window.__kof.snapshot().camera.koZoom > 0.32,
+  { timeout: 6000 },
+).catch(() => {});
 const koShot = await snap();
 const koDom = await page.evaluate(() => ({
   flash: document.getElementById('screen-flash')?.className ?? '',
@@ -698,6 +703,126 @@ try {
   check('动作关键帧拼图已生成', false, String(err.message).slice(0, 160));
 }
 
+// ── M2：236 超必杀的浏览器端闭环（同步喂帧，不依赖 headless 键盘时序） ──────
+const superProbe = await page.evaluate(() => {
+  const k = window.__kof;
+  const m = k.match;
+  const cost = k.config.superCost;
+  const EMPTY = { dir: 0, jump: false, down: false, guard: false, buttons: [] };
+  const F = (o) => ({ ...EMPTY, ...o });
+  const qcf = (dir) => [
+    F({ down: true }), F({ down: true }),
+    F({ down: true, dir }), F({ down: true, dir }),
+    F({ dir, buttons: ['HP'] }),
+  ];
+  // 每帧强制归位，排除 AI 干扰；inputHistory 清掉此前真实按键留下的方向序列。
+  const ready = (meter) => {
+    m.phase = 'fight';
+    m.hitstop = 0;
+    m.buffered.length = 0;
+    m.inputHistory.length = 0;
+    m.p1.meter = meter;
+    for (const f of [m.p1, m.p2]) {
+      f.state = 'idle'; f.move = null; f.moveFrame = 0; f.stunLeft = 0;
+      f.hasHit = false; f.y = 0; f.vy = 0; f.vx = 0;
+      f.airborne = false; f.guarding = false; f.crouching = false; f.guardLevel = null;
+    }
+  };
+  const feed = (frames, mirrored = false) => {
+    for (const f of frames) {
+      m.hitstop = 0;
+      m.p1.x = mirrored ? 0.35 : -0.35;
+      m.p2.x = mirrored ? -0.35 : 0.35;
+      if (m.p2.state === 'attack') {
+        m.p2.state = 'idle'; m.p2.move = null; m.p2.moveFrame = 0;
+      }
+      m.step(f);
+    }
+    return { move: m.p1.move?.id ?? null, meter: m.p1.meter, facing: m.p1.facing };
+  };
+
+  ready(100);
+  const right = feed(qcf(1));
+
+  ready(100);
+  const mirrored = feed(qcf(-1), true); // 换到右半场，facing = -1，必须摇 ↓↙←
+
+  ready(100);
+  const backward = feed(qcf(-1));       // 仍在左半场却向后摇
+
+  ready(cost - 1);
+  const poor = feed(qcf(1));            // POW 差 1 点
+
+  ready(100);
+  m.step(F({ down: true }));
+  m.step(F({ down: true, dir: 1 }));
+  for (let i = 0; i < k.config.qcfWindow + 3; i++) {
+    m.hitstop = 0;
+    m.p1.state = 'idle'; m.p1.move = null; m.p1.stunLeft = 0;
+    m.p2.state = 'idle'; m.p2.move = null;
+    m.step(EMPTY);
+  }
+  m.step(F({ dir: 1, buttons: ['HP'] }));
+  const expired = { move: m.p1.move?.id ?? null, meter: m.p1.meter };
+
+  return {
+    cost, window: k.config.qcfWindow, frame: k.moves.SUPER,
+    tags: k.sampleAttackTags('SUPER'),
+    right, mirrored, backward, poor, expired,
+  };
+});
+
+check('236 超必杀：帧表就位且四段动作齐全',
+  superProbe.frame.id === 'SUPER' && superProbe.frame.damage > 20 &&
+  superProbe.frame.meterGain === 0 &&
+  ['windup', 'strike', 'follow', 'recovery'].every((s) => stages(superProbe.tags).includes(s)),
+  `dmg=${superProbe.frame.damage}, 分段=${stages(superProbe.tags).join('→')}`);
+check('236 超必杀：朝向对手摇杆扣半槽并起 SUPER',
+  superProbe.right.facing === 1 && superProbe.right.move === 'SUPER' &&
+  superProbe.right.meter === 100 - superProbe.cost,
+  JSON.stringify(superProbe.right));
+check('236 超必杀：镜像站位需反向摇杆（绝对方向与 facing 比对）',
+  superProbe.mirrored.facing === -1 && superProbe.mirrored.move === 'SUPER' &&
+  superProbe.mirrored.meter === 100 - superProbe.cost,
+  JSON.stringify(superProbe.mirrored));
+check('236 超必杀：背向摇杆 / POW 不足 / 窗口过期都回退普通招且不扣槽',
+  superProbe.backward.move === 'HP' && superProbe.backward.meter === 100 &&
+  superProbe.poor.move === 'HP' && superProbe.poor.meter === superProbe.cost - 1 &&
+  superProbe.expired.move === 'HP' && superProbe.expired.meter === 100,
+  `背向=${superProbe.backward.move}/${superProbe.backward.meter}, ` +
+  `不足=${superProbe.poor.move}/${superProbe.poor.meter}, ` +
+  `过期=${superProbe.expired.move}/${superProbe.expired.meter}`);
+check('236 输入窗口与消耗同源（脚本不硬编码第二份数值）',
+  superProbe.cost === 50 && superProbe.window === 20,
+  `cost=${superProbe.cost}, window=${superProbe.window}`);
+
+const superImpact = await page.evaluate(() => new Promise((resolve) => {
+  window.__kof.showSuper();
+  requestAnimationFrame(() => {
+    const s = window.__kof.snapshot();
+    const alert = document.getElementById('alert');
+    resolve({
+      move: s.p1.move, tag: s.anim[0].tag, fx: s.fx, zoom: s.camera.zoom,
+      alert: alert?.textContent ?? '', alertClass: alert?.className ?? '',
+      flash: document.getElementById('screen-flash')?.className ?? '',
+    });
+  });
+}));
+const superShot = path.join(shots, '09-super.png');
+await page.screenshot({ path: superShot });
+check('超必杀发力帧姿态到位（strike:SUPER）',
+  superImpact.move === 'SUPER' && superImpact.tag.startsWith('strike:'),
+  `${superImpact.move} / ${superImpact.tag}`);
+check('超必杀专属演出：五类特效 + 酸绿提示 + 中闪 + 命中推镜',
+  ['sparks', 'lines', 'glows', 'arcs', 'ghosts'].every((k) => superImpact.fx.counts[k] > 0) &&
+  superImpact.alert.includes('SUPER FINISH') && superImpact.alertClass.includes('super') &&
+  superImpact.flash.includes('super') && superImpact.zoom > 0.3,
+  `fx=${JSON.stringify(superImpact.fx.counts)}, zoom=${superImpact.zoom.toFixed(2)}, ` +
+  `alert=${superImpact.alertClass}, flash=${superImpact.flash}`);
+check('超必杀演出截图已生成', fs.existsSync(superShot) && fs.statSync(superShot).size > 10000,
+  `${(fs.existsSync(superShot) ? fs.statSync(superShot).size / 1024 : 0).toFixed(0)} KB`);
+await page.evaluate(() => window.__kof.clearPose());
+
 check('全程无 pageerror / console.error / 失败请求',
   pageErrors.length === 0 && consoleErrors.length === 0 && failedRequests.length === 0,
   [...pageErrors, ...consoleErrors, ...failedRequests].join(' | '));
@@ -709,6 +834,7 @@ const report = {
   attackTags, airTags, idleDeltas, frameTags, difficultyProbe, debugProbe,
   fistGain, footGain, airFootGain, guardGap,
   impactProbe, recoil, dustBefore, dustAfter, freeze, koShot, koDom, resetShot,
+  superProbe, superImpact,
   pageErrors, consoleErrors, failedRequests, results,
 };
 fs.writeFileSync(path.join(shots, 'report.json'), JSON.stringify(report, null, 2));

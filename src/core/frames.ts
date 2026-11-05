@@ -1,8 +1,8 @@
 /** 所有数值均为「逻辑帧」或「世界单位」，逻辑固定 60Hz 步进。 */
 
-export type MoveId = 'LP' | 'HP' | 'LK' | 'HK' | 'SWEEP' | 'JLP' | 'JHK';
+export type MoveId = 'LP' | 'HP' | 'LK' | 'HK' | 'SWEEP' | 'JLP' | 'JHK' | 'SUPER';
 export type ButtonId = 'LP' | 'HP' | 'LK' | 'HK';
-export type PoseKey = 'punchL' | 'punchH' | 'kickL' | 'kickH' | 'sweep' | 'jumpPunch' | 'jumpKick';
+export type PoseKey = 'punchL' | 'punchH' | 'kickL' | 'kickH' | 'sweep' | 'jumpPunch' | 'jumpKick' | 'super';
 /**
  * 攻击高度属性：中段两种防御都能挡；下段只能蹲防；上段（跳攻）只能站防。
  * 防御姿势选错即按普通命中结算，并给 GUARD BREAK 反馈。
@@ -89,6 +89,15 @@ export const MOVES: Record<MoveId, MoveDef> = {
     hitbox: { x: 0.68, y: 0.42, w: 0.80, h: 0.60 },
     knockdown: false, cancelInto: [], pose: 'jumpKick', level: 'overhead', air: true,
   },
+
+  /** M2 超必杀：只能由 236 指令 + SUPER_COST 消费起招，不进按键直连映射表。 */
+  SUPER: {
+    id: 'SUPER', label: '流星直拳', startup: 10, active: 5, recovery: 22,
+    damage: 26, hitstun: 34, blockstun: 20, hitstop: 12,
+    pushback: 0.46, meterGain: 0,
+    hitbox: { x: 0.82, y: 1.24, w: 1.05, h: 0.46 },
+    knockdown: true, cancelInto: [], pose: 'super', level: 'mid',
+  },
 };
 
 export const BUTTON_MOVE: Record<ButtonId, MoveId> = {
@@ -106,6 +115,8 @@ export function moveDuration(m: MoveDef): number {
 
 export const MAX_HP = 100;
 export const MAX_METER = 100;
+/** 236 超必杀的 POW 消费：半槽一次，攒满可连续放两次。必杀本身不再攒气（meterGain = 0）。 */
+export const SUPER_COST = 50;
 export const ROUND_SECONDS = 99;
 export const ARENA_HALF = 3.35;
 export const WALK_SPEED = 0.055;

@@ -58,6 +58,13 @@ export class Sfx {
     }
   }
 
+  /** M2 超必杀：更长的低频噪声 + 锯齿塌陷，和普通重击区分开。 */
+  superMove(): void {
+    if (!this.ctx) return;
+    this.noise(0.22, 520, 0.30);
+    this.tone(140, 0.34, 0.24, 'sawtooth');
+  }
+
   announce(kind: 'fight' | 'ko' | 'round'): void {
     if (!this.ctx) return;
     if (kind === 'fight') this.tone(720, 0.16, 0.11, 'triangle');
