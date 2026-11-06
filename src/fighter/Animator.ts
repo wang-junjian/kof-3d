@@ -135,14 +135,21 @@ const POSES = {
     hair: [-0.88, 0, 0],
   }, -0.44, -0.64, 1.0),
 
+  /**
+   * 彻底倒地：绕 Z 轴翻到接近水平（±1.5rad），rootY 抬到身体半厚，
+   * 让背/腿贴住地面而不是穿进地板。
+   * 翻转方向取「头朝远离对手一侧」：root 的 Z 旋转是 lean*facing，
+   * 因此两名角色倒下后都朝各自的外侧铺开，不会压在对手身上。
+   * 四肢的 Z 分量一律收到接近 0——大角度下任何 Z 偏转都会把肢体甩到地面以下。
+   */
   ko: withBase({
-    torso: [-0.30, 0, 0], chest: [-0.10, 0, 0], head: [-0.20, 0, 0],
-    shoulderL: [0.78, 0, -0.95], elbowL: [-0.10, 0, -0.14],
-    shoulderR: [0.76, 0, 0.92], elbowR: [-0.10, 0, 0.14],
-    hipL: [-0.08, 0, -0.46], kneeL: [0.35, 0, 0.22],
-    hipR: [0.06, 0, 0.28], kneeR: [0.55, 0, -0.18],
-    hair: [-0.90, 0, 0],
-  }, -0.62, -1.30, 0.6),
+    torso: [-0.12, 0, 0], chest: [0.05, 0, 0], head: [0.28, 0, 0],
+    shoulderL: [-0.34, 0, 0.16], elbowL: [-0.72, 0, 0],
+    shoulderR: [-0.28, 0, -0.14], elbowR: [-0.66, 0, 0],
+    hipL: [0.08, 0, 0.10], kneeL: [0.36, 0, 0],
+    hipR: [-0.05, 0, -0.08], kneeR: [0.22, 0, 0],
+    hair: [-0.58, 0, 0],
+  }, 0.14, 1.50, 0.6),
 };
 
 /**
@@ -480,8 +487,9 @@ function stunPose(f: Fighter, time: number): { pose: Pose; tag: string } {
     const pose = blend(POSES.knockdown, POSES.crouch, (t - 0.72) / 0.28);
     return { pose, tag: 'getup' };
   }
-  // ko
-  const pose = blend(POSES.knockdown, POSES.ko, clamp01(frame / 12));
+  // ko：从受击峰值继续向后倒，而不是从跪姿翻过去——
+  // 跪姿的 lean 是朝对手的，再接到仰面躺下会变成 120° 的反向翻转。
+  const pose = blend(POSES.hitPeak, POSES.ko, easeOut(clamp01(frame / 14)));
   return { pose, tag: 'ko' };
 }
 

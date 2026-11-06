@@ -311,6 +311,17 @@ export class Fighter {
       this.stunLeft = m.hitstun;
       this.meter = Math.min(MAX_METER, this.meter + 2);
     }
+
+    // 破防 / 被命中后必须交出防御姿态。inGuard 只看 guarding，不看状态，
+    // 所以留在硬直里的 guarding 会让下一记追击被自动挡下——摆错姿势反而比
+    // 不防御更安全，整套 guardLevel 设计就失效了。crouching 也要清：
+    // hurtbox() 直接读它，蹲盒残留会让站着的角色躲过所有上段攻击。
+    // blocked 分支不清：blockstun 期间松手仍继续挡，是刻意保留的手感。
+    if (!blocked) {
+      this.guarding = false;
+      this.guardLevel = null;
+      this.crouching = false;
+    }
     this.stateFrame = 0;
 
     attacker.hasHit = true;

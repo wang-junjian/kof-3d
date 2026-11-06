@@ -151,6 +151,41 @@ test('回合切换清空 236 历史，摇杆输入不跨回合残留', () => {
   assert.equal(m.p1.meter, 100);
 });
 
+test('顿帧期间摇完 236：解冻后仍按 SUPER 结算，POW 只扣一次', () => {
+  const m = readySuper();
+  m.hitstop = 4;
+  for (const f of [
+    F({ down: true }),
+    F({ down: true, dir: 1 }),
+    F({ dir: 1, buttons: ['HP'] }),
+    EMPTY,
+  ]) assert.equal(m.step(f), true, '顿帧期间 step 必须报告冻结');
+  assert.equal(m.hitstop, 0);
+  assert.equal(m.p1.state, 'idle', '顿帧里不该推进状态机');
+
+  m.step(EMPTY);
+  assert.equal(m.p1.move?.id, 'SUPER');
+  assert.equal(m.p1.meter, 100 - frames.SUPER_COST);
+});
+
+test('KO 后倒地动画继续推进：roundOver 期间 stateFrame 增长但角色不再行动', () => {
+  const { m } = makeMatch();
+  m.phase = 'fight';
+  m.hitstop = 0;
+  m.p2.hp = 1;
+  m.p2.receiveHit(frames.MOVES.HP, m.p1, 0, 1);
+  assert.equal(m.p2.state, 'ko');
+
+  m.step(EMPTY); // 本帧结算 KO 并切到 roundOver
+  assert.ok(['roundOver', 'matchOver'].includes(m.phase));
+  const f0 = m.p2.stateFrame;
+
+  for (let i = 0; i < 30; i++) m.step(EMPTY);
+  assert.equal(m.p2.stateFrame, f0 + 30, 'KO 姿态靠 stateFrame 插值，冻结会停在倒地中途');
+  assert.equal(m.p2.state, 'ko');
+  assert.ok(Math.abs(m.p2.x) <= frames.ARENA_HALF + 1e-9, '击退滑行不能越出场地');
+});
+
 test('restart 复位到第 1 局、满血、胜场清零', () => {
   const { m, events } = makeMatch();
   m.p1.wins = 2;

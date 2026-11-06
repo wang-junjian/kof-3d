@@ -1,5 +1,5 @@
 import { ROUND_SECONDS, type ButtonId } from './frames';
-import { QCF_WINDOW, detectQcf, type InputFrame } from './input';
+import { EMPTY_INPUT, QCF_WINDOW, detectQcf, type InputFrame } from './input';
 import { boxCenterX, boxCenterY, clampArena, overlaps, separate } from './hitbox';
 import type { AIController } from '../fighter/AI';
 import { Fighter, type HitEvent } from '../fighter/Fighter';
@@ -27,10 +27,12 @@ export class Match {
   hitstop = 0;
   frame = 0;
   private phaseFrames = 0;
-  /** 顿帧期间玩家按下的攻击键不丢失，解冻后合并进下一逻辑帧。 */
+  /** 顿帧期间玩家按下的攻击键不丢失，解冻后合并进下一逻辑帧（早按的排在前面）。 */
   private readonly buffered: ButtonId[] = [];
-  /** 236 指令的输入历史（只含真正推进对局的逻辑帧），长度上限 QCF_WINDOW。 */
+  /** 236 指令的输入历史（含顿帧——顿帧里摇的指令必须算数），长度上限 QCF_WINDOW。 */
   private readonly inputHistory: InputFrame[] = [];
+  /** 顿帧期间识别出的 236：解冻后随第一个逻辑帧一起交给状态机。 */
+  private pendingQcf: 1 | -1 | null = null;
 
   constructor(
     private readonly ai: AIController,
@@ -67,6 +69,8 @@ export class Match {
     this.hitstop = 0;
     this.phaseFrames = 0;
     this.inputHistory.length = 0; // 摇杆指令不跨回合残留
+    this.buffered.length = 0;     // 上一回合顿帧里按下的键也不该在新回合开局生效
+    this.pendingQcf = null;
     this.phase = 'intro';
     this.cb.onRoundStart(n);
   }
@@ -81,6 +85,10 @@ export class Match {
     if (this.hitstop > 0) {
       this.hitstop--;
       this.buffered.push(...playerInput.buttons);
+      // 顿帧里也要采样方向：玩家在命中停顿中摇完的 236 不能丢，
+      // 否则「打中后接必杀」这条最基本的连段永远做不出来。
+      const frozen = this.track(playerInput);
+      if (frozen) this.pendingQcf = frozen;
       return true;
     }
     const input: InputFrame = this.buffered.length > 0
@@ -101,22 +109,23 @@ export class Match {
     }
 
     if (this.phase === 'roundOver') {
+      this.advanceKo();
       if (this.phaseFrames >= 150) this.beginRound(this.round + 1);
       return false;
     }
 
     if (this.phase === 'matchOver') {
+      this.advanceKo();
       if (this.phaseFrames > 60 && input.buttons.length > 0) this.restart();
       return false;
     }
 
     const aiInput = this.ai.decide(this.p2, this.p1);
     this.updateFacing();
-    // 236 指令只在这里识别：intro / roundOver / hitstop 的帧不进输入历史，
+    // 236 指令只在这里识别：intro / roundOver / matchOver 的帧不进输入历史，
     // 避免跨阶段残留误触发。detectQcf 产出绝对方向，facing 比对在 Fighter 里做。
-    const qcf = detectQcf(this.inputHistory, input);
-    this.inputHistory.push(input);
-    if (this.inputHistory.length > QCF_WINDOW) this.inputHistory.shift();
+    const qcf = this.pendingQcf ?? this.track(input);
+    this.pendingQcf = null;
     const command: InputFrame = qcf ? { ...input, qcf } : input;
     this.p1.update(command);
     this.p2.update(aiInput);
@@ -128,6 +137,28 @@ export class Match {
       this.endRound();
     }
     return false;
+  }
+
+  /**
+   * 把一帧输入记入 236 历史，并返回该帧自身识别出的指令（历史不含本帧）。
+   * 顿帧与逻辑帧共用同一条判定链，手摇、触屏宏、AI 显式输入都走这里。
+   */
+  private track(frame: InputFrame): 1 | -1 | null {
+    const qcf = detectQcf(this.inputHistory, frame);
+    this.inputHistory.push(frame);
+    if (this.inputHistory.length > QCF_WINDOW) this.inputHistory.shift();
+    return qcf;
+  }
+
+  /**
+   * 回合结束后只推进 KO 角色的表现层时间：stateFrame 继续增长，倒地姿态才能
+   * 播到 POSES.ko。用空输入喂养，update 会停在 'ko' 分支——不行动、不接受操作，
+   * 只跑物理让击退滑行收尾。
+   */
+  private advanceKo(): void {
+    for (const f of this.fighters) {
+      if (f.state === 'ko') f.update(EMPTY_INPUT);
+    }
   }
 
   private updateFacing(): void {

@@ -217,11 +217,13 @@ const match = new Match(ai, {
     gameCamera.reset();
     sfx.announce('round');
   },
-  // 每回合 KO / TIME UP 都走特写，不只是整场比赛结束；下一回合 intro 时复位
-  onRoundEnd: (winner) => {
+  // 每回合 KO / TIME UP 都走特写，不只是整场比赛结束；下一回合 intro 时复位。
+  // 焦点取两人中点：倒地者躺下后身体沿地面向外铺开近一个身长，只压胜者会把
+  // 一整条身体推出画外，只剩小腿卡在边上。
+  onRoundEnd: () => {
     hud.setKo(true);
     hud.flash('ko');
-    gameCamera.ko(winner === 1 ? match.p2.x : match.p1.x);
+    gameCamera.ko((match.p1.x + match.p2.x) / 2);
   },
   onMatchEnd: (winner) => hud.showWinner(winner === 0 ? 'RIN' : 'FEI'),
   onAnnounce: (text) => {

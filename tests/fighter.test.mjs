@@ -123,6 +123,53 @@ test('receiveHit：站防挡中段、漏下段并标记 GUARD BREAK；蹲防挡�
   assert.equal(ev.blocked, true);
 });
 
+// ── 破防后必须交出防御姿态（否则「姿势错」反而比不防御更安全） ──────
+
+test('站防吃下段扫腿破防后清空防御姿态：追击的中段重拳按全额伤害结算', () => {
+  const [atk, def] = pair();
+  def.state = 'guard';
+  def.guarding = true;
+  def.guardLevel = 'stand';
+
+  const first = def.receiveHit(MOVES.SWEEP, atk, 0, 0.3);
+  assert.equal(first.blocked, false);
+  assert.equal(first.guardBreak, true);
+  assert.equal(def.state, 'knockdown');
+  assert.equal(def.guarding, false, '破防后仍留着 guarding，下一击会被白送格挡');
+  assert.equal(def.guardLevel, null);
+
+  const second = def.receiveHit(MOVES.HP, atk, 0, 1);
+  assert.equal(second.blocked, false, '硬直中的追击不该自动格挡');
+  assert.equal(def.hp, MAX_HP - MOVES.SWEEP.damage - MOVES.HP.damage);
+});
+
+test('蹲防被跳攻击破防后恢复站姿受伤盒：上段不再因为蹲盒残留而落空', () => {
+  const [atk, def] = pair();
+  def.state = 'guard';
+  def.guarding = true;
+  def.guardLevel = 'crouch';
+  def.crouching = true;
+  assert.equal(def.hurtbox().maxY, 1.10);
+
+  const ev = def.receiveHit(MOVES.JHK, atk, 0, 1);
+  assert.equal(ev.blocked, false);
+  assert.equal(ev.guardBreak, true);
+  assert.equal(def.crouching, false);
+  assert.ok(def.hurtbox().maxY > 1.7, `破防后仍是蹲盒（maxY=${def.hurtbox().maxY}）`);
+});
+
+test('格挡成功保留防御姿态：blockstun 中继续挨同高度攻击仍是格挡', () => {
+  const [atk, def] = pair();
+  def.state = 'guard';
+  def.guarding = true;
+  def.guardLevel = 'stand';
+
+  assert.equal(def.receiveHit(MOVES.HP, atk, 0, 1).blocked, true);
+  assert.equal(def.guarding, true);
+  assert.equal(def.receiveHit(MOVES.HP, atk, 0, 1).blocked, true);
+  assert.equal(def.hp, MAX_HP - 1 - 1);
+});
+
 test('无防御时按全额伤害结算并累计连段；血量归零进入 KO', () => {
   const [atk, def] = pair();
   const a = def.receiveHit(MOVES.LP, atk, 0, 1);
