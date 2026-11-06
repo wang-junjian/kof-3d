@@ -2,7 +2,12 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- 格斗游戏是高频连点：锁死缩放（含 Android / WebView），并声明 Web App 能力，
+       让 iOS「添加到主屏幕」后以无地址栏的 standalone 全屏运行。 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="color-scheme" content="dark" />
   <title>RIN vs FEI · 3D 格斗垂直切片</title>
 </head>

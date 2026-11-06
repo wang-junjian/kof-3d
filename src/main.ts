@@ -18,6 +18,7 @@ import { DebugBoxes } from './view/Debug';
 import { Hud } from './view/Hud';
 import { Sfx } from './view/Audio';
 import { Controls, type ControlsProbe } from './view/Controls';
+import { Screen, type ScreenProbe } from './view/Screen';
 
 interface FighterSnap {
   hp: number; meter: number; state: string; move: string | null;
@@ -63,6 +64,8 @@ interface KofSnapshot {
   anim: [AnimDebug, AnimDebug];
   canvas: { w: number; h: number };
   glLost: boolean;
+  /** 移动端全屏 / 手势适配状态，供浏览器自检与线上验证读取。 */
+  fullscreen: ScreenProbe;
 }
 
 interface PoseOptions {
@@ -100,6 +103,13 @@ interface KofApi {
   controls: {
     probe: () => ControlsProbe;
     setTouchVisible: (on: boolean | null) => void;
+  };
+  /** 全屏状态探针与手动开关（自动全屏在首次交互里已触发）。 */
+  fullscreen: {
+    probe: () => ScreenProbe;
+    enter: () => Promise<boolean>;
+    exit: () => Promise<void>;
+    toggle: () => Promise<void>;
   };
 }
 
@@ -226,7 +236,26 @@ window.addEventListener('keydown', (e) => {
   hud.setDifficulty(d);
 });
 
+// 视口尺寸统一入口：全屏切换、地址栏收起、旋转屏幕、visualViewport 变化都走这里。
+// rAF 去重，避免一次全屏过渡里连发 resize 造成多次 setSize。
+const onResize = (): void => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  gameCamera.resize(w / h);
+};
+let resizeQueued = false;
+const scheduleResize = (): void => {
+  if (resizeQueued) return;
+  resizeQueued = true;
+  requestAnimationFrame(() => { resizeQueued = false; onResize(); });
+};
+const screen = new Screen(scheduleResize);
+window.addEventListener('resize', scheduleResize);
+
 input.onFirstInteraction = () => {
+  // 必须留在用户手势的同步调用栈里：await / setTimeout 之后浏览器就不再允许全屏。
+  screen.enterAuto();
   sfx.unlock();
   document.body.classList.add('started');
   boot.classList.add('gone');
@@ -289,13 +318,6 @@ const loop = new FixedLoop(
   },
 );
 
-const onResize = (): void => {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  renderer.setSize(w, h, false);
-  gameCamera.resize(w / h);
-};
-window.addEventListener('resize', onResize);
 loop.start();
 
 const snapFighter = (f: {
@@ -438,6 +460,12 @@ window.__kof = {
     probe: () => controls.probe(),
     setTouchVisible: (on) => controls.setTouchVisible(on),
   },
+  fullscreen: {
+    probe: () => screen.probe(),
+    enter: () => screen.enter('manual'),
+    exit: () => screen.exit(),
+    toggle: () => screen.toggle(),
+  },
   setJoint: (joint, angles) => {
     const v = views[0];
     if (v instanceof RigView) v.setOverride(joint, angles);
@@ -485,5 +513,6 @@ window.__kof = {
     anim: [animators[0].inspect(), animators[1].inspect()],
     canvas: { w: canvas.width, h: canvas.height },
     glLost: renderer.getContext().isContextLost(),
+    fullscreen: screen.probe(),
   }),
 };

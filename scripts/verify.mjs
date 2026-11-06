@@ -92,6 +92,13 @@ check('产物不含 2D 贴图链路（无内联图片 / 无注入数据）',
   `html=${(htmlBytes / 1024).toFixed(0)} KB, injected=${!noFaceData}`);
 check('单文件仍控制在 1 MB 内（可离线双击打开）', htmlBytes < 1024 * 1024,
   `${(htmlBytes / 1024).toFixed(0)} KB`);
+check('viewport 锁缩放 + Web App 全屏声明已内联进单文件',
+  /user-scalable=no/.test(htmlSource) && /maximum-scale=1/.test(htmlSource) &&
+  /viewport-fit=cover/.test(htmlSource) &&
+  /apple-mobile-web-app-capable/.test(htmlSource) &&
+  /mobile-web-app-capable/.test(htmlSource) &&
+  htmlSource.includes('添加到主屏幕'),
+  `meta=${(htmlSource.match(/<meta name="(?:viewport|apple-mobile-web-app-capable|mobile-web-app-capable)"/g) ?? []).length}`);
 check('HUD 关键文案存在（含 236 超必杀提示）',
   ['RIN', 'FEI', 'ROUND 1', '99', '轻拳', '236'].every((t) => domText.includes(t)));
 check('逻辑帧已推进', first.frame > 30, `frame=${first.frame}, fps=${first.fps}`);
@@ -104,6 +111,37 @@ await page.screenshot({ path: path.join(shots, '01-boot.png') });
 await page.click('#boot');
 await sleep(300);
 check('点击后启动遮罩消失', (await snap()).bootHidden);
+
+const shellDesktop = await page.evaluate(() => {
+  const btn = document.getElementById('fs-toggle');
+  const r = btn?.getBoundingClientRect();
+  return {
+    probe: window.__kof.fullscreen.probe(),
+    snap: window.__kof.snapshot().fullscreen,
+    btn: r ? { w: r.width, h: r.height, x: r.x, y: r.y, right: r.right, bottom: r.bottom } : null,
+    appH: document.getElementById('app').getBoundingClientRect().height,
+    clientH: document.documentElement.clientHeight,
+    stageTouch: getComputedStyle(document.getElementById('stage')).touchAction,
+    appTouch: getComputedStyle(document.getElementById('app')).touchAction,
+    bodyTouch: getComputedStyle(document.body).touchAction,
+    overscroll: getComputedStyle(document.body).overscrollBehaviorY,
+  };
+});
+check('全屏切换按钮常驻且落在视口内；桌面不自动进入全屏',
+  !!shellDesktop.btn && shellDesktop.btn.w >= 32 && shellDesktop.btn.h >= 32 &&
+  shellDesktop.btn.x >= 0 && shellDesktop.btn.y >= 0 &&
+  shellDesktop.btn.right <= 1280 && shellDesktop.btn.bottom <= 800 &&
+  shellDesktop.probe.autoRequested === false && shellDesktop.probe.attempts === 0 &&
+  shellDesktop.snap.supported === shellDesktop.probe.supported,
+  `btn=${JSON.stringify(shellDesktop.btn)}, auto=${shellDesktop.probe.autoRequested}, attempts=${shellDesktop.probe.attempts}`);
+check('全局 touch-action / overscroll 锁住缩放与页面拖动',
+  shellDesktop.stageTouch === 'none' && shellDesktop.appTouch === 'none' &&
+  shellDesktop.bodyTouch === 'none' && shellDesktop.overscroll === 'none',
+  `stage=${shellDesktop.stageTouch}, app=${shellDesktop.appTouch}, body=${shellDesktop.bodyTouch}, overscroll=${shellDesktop.overscroll}`);
+check('100dvh 让画布跟随动态视口高度',
+  Math.abs(shellDesktop.appH - shellDesktop.clientH) < 2,
+  `app=${shellDesktop.appH}, client=${shellDesktop.clientH}`);
+
 await page.waitForFunction('window.__kof.snapshot().phase === "fight"', { timeout: 12000 });
 const fightStart = await snap();
 check('FIGHT 阶段可达', fightStart.phase === 'fight', `frame=${fightStart.frame}`);
@@ -991,6 +1029,15 @@ await mobilePage.setViewport({ width: 844, height: 390, isMobile: true, hasTouch
 mobilePage.on('pageerror', (e) => pageErrors.push(`[mobile] ${e}`));
 mobilePage.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(`[mobile] ${m.text()}`); });
 mobilePage.on('requestfailed', (r) => failedRequests.push(`[mobile] ${r.url()}`));
+// headless 没有真实窗口：把 Fullscreen API 打成记录桩，既能验证「首次交互
+// 真的在用户手势里请求了全屏」，又不会让全屏扰动 emulation 视口与截图。
+await mobilePage.evaluateOnNewDocument(() => {
+  window.__fsCalls = 0;
+  Element.prototype.requestFullscreen = function () {
+    window.__fsCalls++;
+    return Promise.resolve();
+  };
+});
 await mobilePage.goto(`file://${target}`, { waitUntil: 'load' });
 await mobilePage.waitForFunction('window.__kof && window.__kof.ready === true', { timeout: 25000 });
 await sleep(700);
@@ -1007,6 +1054,17 @@ check('触屏开机页只留设备说明、虚拟键在遮罩期间不露面',
   `display=${mobileBoot.display}, kbHidden=${mobileBoot.kbHidden}, hint=${mobileBoot.hint.slice(0, 28)}`);
 await mobilePage.click('#boot');
 await sleep(600);
+const mobileShell = await mobilePage.evaluate(() => ({
+  probe: window.__kof.fullscreen.probe(),
+  fsCalls: window.__fsCalls,
+  bootGo: document.getElementById('boot-go')?.textContent ?? '',
+}));
+check('触屏首次交互在用户手势里恰好请求一次自动全屏',
+  mobileShell.probe.touchLike && mobileShell.probe.supported &&
+  mobileShell.probe.autoRequested && mobileShell.probe.attempts === 1 &&
+  mobileShell.fsCalls === 1 && mobileShell.probe.lastError === null &&
+  mobileShell.bootGo.includes('自动全屏'),
+  `touchLike=${mobileShell.probe.touchLike}, attempts=${mobileShell.probe.attempts}, calls=${mobileShell.fsCalls}, err=${mobileShell.probe.lastError}`);
 const mobileProbe = await mobilePage.evaluate(() => ({
   probe: window.__kof.controls.probe(),
   maxTouchPoints: navigator.maxTouchPoints,
@@ -1024,6 +1082,57 @@ check('真实触屏横屏视口自动启用虚拟键（设备判定，无需强�
   `maxTouchPoints=${mobileProbe.maxTouchPoints}, coarse=${mobileProbe.coarse}, canvas=${mobileProbe.canvas.w}x${mobileProbe.canvas.h}`);
 check('移动端横屏截图已生成', fs.existsSync(mobileShot) && fs.statSync(mobileShot).size > 10000,
   `${(fs.statSync(mobileShot).size / 1024).toFixed(0)} KB`);
+
+// 复现用户报的场景：快速连点同一个攻击键。浏览器不能把它当成双击放大，
+// 两次 pointerdown 也都必须送进输入缓冲（不能被手势拦截吞掉）。
+const tapPoint = await mobilePage.evaluate(() => {
+  const r = document.querySelector('#touch-controls [data-role="LP"]').getBoundingClientRect();
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+});
+await mobilePage.evaluate(() => {
+  window.__tapCount = 0;
+  window.addEventListener('pointerdown', () => { window.__tapCount++; });
+});
+await mobilePage.touchscreen.tap(tapPoint.x, tapPoint.y);
+await mobilePage.touchscreen.tap(tapPoint.x, tapPoint.y);
+const dblTap = await mobilePage.evaluate(() => {
+  const fire = (type) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    document.dispatchEvent(e);
+    return e.defaultPrevented;
+  };
+  const touchEvent = (type, count) => {
+    try {
+      const t = new Touch({ identifier: 1, target: document.getElementById('stage') });
+      const e = new TouchEvent(type, {
+        bubbles: true, cancelable: true,
+        touches: Array(count).fill(t), targetTouches: [t], changedTouches: [t],
+      });
+      document.dispatchEvent(e);
+      return e.defaultPrevented;
+    } catch {
+      return 'unsupported'; // 浏览器不提供 Touch 构造器时退化为声明式检查
+    }
+  };
+  return {
+    taps: window.__tapCount,
+    scale: window.visualViewport?.scale ?? 1,
+    innerW: window.innerWidth,
+    clientW: document.documentElement.clientWidth,
+    keyTouch: getComputedStyle(document.querySelector('#touch-controls [data-role="LP"]')).touchAction,
+    dbl: fire('dblclick'),
+    gesture: fire('gesturestart'),
+    multi: touchEvent('touchstart', 2),
+    move: touchEvent('touchmove', 1),
+    context: fire('contextmenu'),
+  };
+});
+check('快速连点攻击键：不双击放大、两次输入都送达、捏合/拖动/长按被拦截',
+  dblTap.taps === 2 && dblTap.scale === 1 && Math.abs(dblTap.innerW - dblTap.clientW) < 2 &&
+  dblTap.keyTouch === 'none' && dblTap.dbl === true && dblTap.gesture === true &&
+  dblTap.context === true && dblTap.move === true &&
+  (dblTap.multi === true || dblTap.multi === 'unsupported'),
+  `taps=${dblTap.taps}, scale=${dblTap.scale}, dbl=${dblTap.dbl}, gesture=${dblTap.gesture}, multi=${dblTap.multi}, move=${dblTap.move}`);
 await mobilePage.close();
 
 check('全程无 pageerror / console.error / 失败请求（含移动端视口）',
@@ -1039,6 +1148,7 @@ const report = {
   impactProbe, recoil, dustBefore, dustAfter, freeze, koShot, koDom, resetShot,
   superProbe, superImpact,
   touchUi, touchShot, padProbe, padMacro, mobileBoot, mobileProbe, mobileShot,
+  shellDesktop, mobileShell, tapPoint, dblTap,
   pageErrors, consoleErrors, failedRequests, results,
 };
 fs.writeFileSync(path.join(shots, 'report.json'), JSON.stringify(report, null, 2));
