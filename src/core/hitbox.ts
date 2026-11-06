@@ -56,20 +56,22 @@ export function clampArena(x: number): number {
   return Math.max(-arenaHalf, Math.min(arenaHalf, x));
 }
 
-/** 推挤盒不允许两人重叠；被墙卡住时把剩余位移补给另一侧（墙位置随视口变化）。 */
+/** 推挤盒不允许两人重叠；被墙卡住时把整个 pair 平移回场内，间距保持 need。 */
 export function separate(ax: number, bx: number): [number, number] {
   const d = bx - ax;
   const need = PUSH_HALF * 2;
   if (Math.abs(d) >= need) return [ax, bx];
+  // sign 决定「把 a 往 -sign、b 往 +sign 推开」，兼容交叉站位（sign=-1）。
   const sign = d >= 0 ? 1 : -1;
-  const half = (need - Math.abs(d)) / 2;
-  let na = clampArena(ax - sign * half);
-  let nb = clampArena(bx + sign * half);
-  if (Math.abs(nb - na) < need) {
-    const rest = need - Math.abs(nb - na);
-    if (na <= -arenaHalf + 0.001) nb = clampArena(nb + sign * rest);
-    else if (nb >= arenaHalf - 0.001) na = clampArena(na - sign * rest);
-    else { na = clampArena(na - sign * rest / 2); nb = clampArena(nb + sign * rest / 2); }
-  }
-  return [na, nb];
+  const mid = (ax + bx) / 2;
+  const na = mid - sign * need / 2;
+  const nb = mid + sign * need / 2;
+  // 以两人的实际左右端点为准（不假设 a 在左 / b 在右），整体平移回场地内。
+  // setArenaHalf 下限保证 2 * arenaHalf > need，故 left/right 不会同时越界。
+  const left = sign === 1 ? na : nb;
+  const right = sign === 1 ? nb : na;
+  let shift = 0;
+  if (left < -arenaHalf) shift = -arenaHalf - left;
+  else if (right > arenaHalf) shift = arenaHalf - right;
+  return [clampArena(na + shift), clampArena(nb + shift)];
 }

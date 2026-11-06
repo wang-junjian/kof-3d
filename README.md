@@ -149,9 +149,8 @@ CREDITS.md      第三方素材与依赖许可说明
 - **代码**：[MIT License](LICENSE)，Copyright © 2026 Junjian Wang。欢迎 issue / PR；改动请遵守上文硬约束，并保证 `npm test` 与 `npm run verify` 两层断言全绿。
 - **随仓库分发的素材**：`assets/character.vrm`（"Rose" / Polygonal Mind）为 **CC0**，字段与复核命令见 [CREDITS.md](CREDITS.md)。默认单文件产物 `kof-3d.html` 是纯 3D 程序化几何，**不含任何第三方模型、贴图或音频**。
 - **npm 依赖**（three / @pixiv/three-vrm / vite / typescript / esbuild / puppeteer-core）经 `package-lock.json` 安装，许可证随各自 npm 包提供，本仓库不内嵌其源码。
-- **历史脚本**：`scripts/prepare-faces.sh` 属于已被否决的 2D 脸部贴图实验，当前构建**完全不引用**（`texturedMeshes === 0`），所依赖的 `assets/art/` 原图也不在仓库中；保留文件仅作演进记录。
 
-**English**: Source code is MIT-licensed. The only bundled asset is a CC0 VRM sample documented in `CREDITS.md`; the default offline build contains no third-party model or texture. `scripts/prepare-faces.sh` is a deprecated experiment from the discarded 2D-texture approach and is not used by the build.
+**English**: Source code is MIT-licensed. The only bundled asset is a CC0 VRM sample documented in `CREDITS.md`; the default offline build contains no third-party model or texture.
 
 ---
 

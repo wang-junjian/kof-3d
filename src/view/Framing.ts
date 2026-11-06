@@ -4,8 +4,15 @@ import { ARENA_HALF, PUSH_HALF } from '../core/frames';
 export const BASE_FOV = 34;
 /** 横屏 / 桌面的默认相机距离，沿用改动前的值。 */
 export const BASE_CAMERA_Z = 6.4;
-/** 相机距离上限：极端窄视口或调试摆拍时兜底，避免无限拉远。 */
-export const MAX_CAMERA_Z = 30;
+/**
+ * 相机距离上限：极端窄视口或调试摆拍时兜底，避免无限拉远。
+ * 取景契约要求 Z * tan(FOV/2) * MIN_ASPECT >= MIN_ARENA_HALF + BODY_MARGIN = 1.58，
+ * 代入 tan(17°)=0.3057 与 aspect=0.15 得 Z >= 34.45；取 36 留约 4% 余量。
+ * 旧值 30 会让 aspect=0.15 时可见半宽只有 1.376，贴边角色出画且 NDC 兜底已无余量。
+ */
+export const MAX_CAMERA_Z = 36;
+/** 取景支持的最窄宽高比；低于此值不在「两人完整入画」的保证范围内。 */
+export const MIN_ASPECT = 0.15;
 /**
  * 角色中心到外侧还需预留的世界宽度：站立 hurtbox 半宽 0.38，
  * 加挥拳 / 踢腿伸展约 0.32。可见半宽 = 场地半宽 + 该余量时，
@@ -50,7 +57,7 @@ export function zForWidth(needHalf: number, fovDeg: number, aspect: number): num
  * 纯函数、无 DOM / WebGL 依赖，可直接被逻辑层单测引用。
  */
 export function framingFor(rawAspect: number): Framing {
-  const aspect = Math.max(0.15, Math.min(8, rawAspect || 1.6));
+  const aspect = Math.max(MIN_ASPECT, Math.min(8, rawAspect || 1.6));
   const tan = Math.tan((BASE_FOV * Math.PI) / 360);
   if (aspect >= 1) {
     return {

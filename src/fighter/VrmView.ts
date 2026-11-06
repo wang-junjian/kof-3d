@@ -4,7 +4,7 @@ import { VRM, VRMLoaderPlugin } from '@pixiv/three-vrm';
 import type { VRMHumanBoneName } from '@pixiv/three-vrm';
 import type { Fighter } from './Fighter';
 import type { CharacterView, Pose } from './CharacterView';
-import type { JointName } from './rig';
+import { disposeViewResources, type JointName } from './rig';
 
 /** 游戏世界里的角色高度；VRM 模型身高各异，加载后统一归一化到这个值。 */
 const TARGET_HEIGHT = 2.03;
@@ -44,11 +44,23 @@ const FACE_YAW = Math.PI;
  */
 const ARM_DROP = 1.32;
 
-function base64ToBlobUrl(base64: string): string {
+/** 内联的 2.4MB base64 只解码一次，产出可复用的原始二进制。 */
+function decodeBase64(base64: string): ArrayBuffer {
   const bin = atob(base64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  return bytes.buffer;
+}
+
+/**
+ * 缓存粒度只能是原始二进制：gltf / VRM / VrmView 都持有被挂载、被 tint 修改过的
+ * 状态，跨 loadVrmViews 调用复用必然互相覆盖；这里只防止重复热替换时重复 atob
+ * 与数 MB 级临时数组分配。
+ */
+let cachedGlb: Promise<ArrayBuffer> | null = null;
+function getGlb(base64: string): Promise<ArrayBuffer> {
+  cachedGlb ??= Promise.resolve(decodeBase64(base64));
+  return cachedGlb;
 }
 
 export class VrmView implements CharacterView {
@@ -60,6 +72,8 @@ export class VrmView implements CharacterView {
   private readonly materials: THREE.Material[] = [];
   private readonly deltaEuler = new THREE.Euler();
   private readonly deltaQuat = new THREE.Quaternion();
+  /** 上一次 apply 所见到的逻辑帧号：VRM 内部时间只按逻辑帧推进，不看渲染帧频率。 */
+  private lastLogicFrame = -1;
 
   get boneCount(): number {
     return this.bones.size;
@@ -120,9 +134,20 @@ export class VrmView implements CharacterView {
   }
 
   apply(pose: Pose, f: Fighter, time: number): void {
-    // VRM 内部可能把 normalized pose 写回 raw bone，先更新、再叠加我们的姿态
-    void time;
-    this.vrm.update(1 / 60);
+    // VRM 内部时间必须锚定固定 60Hz 逻辑帧，而不是渲染帧频率：高刷屏上按渲染帧
+    // update(1/60) 会让 springBone 物理时间成倍加速。main.ts 传入的 time 已是
+    // 「逻辑帧号 + alpha」，其整数部分即逻辑帧号；Hitstop 时 time 不增、steps 为 0，
+    // springBone 也随视觉时间一起定格。
+    const frame = Math.floor(time);
+    if (this.lastLogicFrame < 0) this.lastLogicFrame = frame; // 首帧不补步
+    if (frame > this.lastLogicFrame) {
+      // 与 FixedLoop 的 steps<5 上限一致；调试钩子/异常跳变也不至于让物理一步爆炸
+      const steps = Math.min(5, frame - this.lastLogicFrame);
+      for (let i = 0; i < steps; i++) this.vrm.update(1 / 60);
+      this.lastLogicFrame = frame;
+    } else if (frame < this.lastLogicFrame) {
+      this.lastLogicFrame = frame; // 调试钩子回拨时同步，避免差分卡住
+    }
 
     for (const [joint, mapping] of Object.entries(BONE_MAP) as
       [JointName, { name: VRMHumanBoneName; sign: [number, number, number] }][]) {
@@ -156,25 +181,44 @@ export class VrmView implements CharacterView {
   dispose(): void {
     this.root.removeFromParent();
     this.shadow.removeFromParent();
+    // 两个角色各自 parse 一份 GLB，vrm.scene 的 geometry/skeleton/material/texture
+    // 全部本实例独占；且 VrmView.ghost() 返回 null、无残影共享几何 → 可全量释放。
+    disposeViewResources(this.vrm.scene, { disposeGeometry: true });
+    // shadow 是 VrmView 自建、不在 vrm.scene 里，需单独释放
+    this.shadow.geometry.dispose();
+    (this.shadow.material as THREE.Material).dispose();
+    this.materials.length = 0;
+    this.bones.clear();
+    this.restQuat.clear();
   }
 }
 
 /** 从构建期内联的 base64 数据加载两个独立 VRM 实例（各自可独立摆动与着色）。 */
 export async function loadVrmViews(base64: string): Promise<CharacterView[]> {
-  const url = base64ToBlobUrl(base64);
-  const loader = new GLTFLoader();
-  // 默认 autoUpdateHumanBones=true 会把 normalized pose 每帧写回 raw bone，
-  // 覆盖我们叠加的格斗姿态。关闭后 raw bone 完全由 CharacterView 控制。
-  loader.register((parser) => new VRMLoaderPlugin(parser, { autoUpdateHumanBones: false }));
+  // Blob URL 只创建一次；revoke 必须晚于两次 loadAsync 全部 settle（含失败路径）。
+  const url = URL.createObjectURL(new Blob([await getGlb(base64)], {
+    type: 'application/octet-stream',
+  }));
+  try {
+    const loader = new GLTFLoader();
+    // 默认 autoUpdateHumanBones=true 会把 normalized pose 每帧写回 raw bone，
+    // 覆盖我们叠加的格斗姿态。关闭后 raw bone 完全由 CharacterView 控制。
+    loader.register((parser) => new VRMLoaderPlugin(parser, { autoUpdateHumanBones: false }));
 
-  const make = async (tint: readonly [number, number, number]): Promise<CharacterView> => {
-    const gltf = await loader.loadAsync(url);
-    const vrm = gltf.userData.vrm as VRM | undefined;
-    if (!vrm) throw new Error('GLB 中未解析出 VRM 扩展，可能不是有效的 .vrm 文件');
-    return new VrmView(vrm, tint);
-  };
-  // 两位角色用极轻的冷暖色调区分，不破坏原贴图
-  const p1 = await make([1.06, 0.96, 1.00]);
-  const p2 = await make([0.96, 1.02, 1.06]);
-  return [p1, p2];
+    const make = async (tint: readonly [number, number, number]): Promise<CharacterView> => {
+      const gltf = await loader.loadAsync(url);
+      const vrm = gltf.userData.vrm as VRM | undefined;
+      if (!vrm) throw new Error('GLB 中未解析出 VRM 扩展，可能不是有效的 .vrm 文件');
+      return new VrmView(vrm, tint);
+    };
+    // 两个独立 VRM 实例必须各自 parse 一次：VRM 的 manager 与 gltf.scene 节点强绑定，
+    // 共享 VRM 实例或 SkeletonUtils.clone 都会让两人姿态/tint 互相覆盖。并发只是省掉串行等待。
+    // 两位角色用极轻的冷暖色调区分，不破坏原贴图
+    return await Promise.all([
+      make([1.06, 0.96, 1.00]),
+      make([0.96, 1.02, 1.06]),
+    ]);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }

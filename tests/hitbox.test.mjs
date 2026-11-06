@@ -57,3 +57,17 @@ test('separate：两人不重叠；靠墙时把剩余位移补给另一侧且不
   const far = separate(-2, 2);
   assert.deepEqual(far, [-2, 2]);
 });
+
+test('separate 交叉站位贴墙：sign=-1 时整体平移回场内，仍拉开到 PUSH_HALF*2', () => {
+  const need = frames.PUSH_HALF * 2;
+  // 两人都贴右墙、b 在 a 左侧：a 已被墙卡死，只能把整个 pair 往左平移
+  const [ra, rb] = separate(frames.ARENA_HALF, frames.ARENA_HALF - 0.05);
+  assert.ok(Math.abs(rb - ra) >= need - 1e-9,
+    `右墙镜像间距 ${Math.abs(rb - ra)} < ${need}（修复前为 0.4625）`);
+  assert.ok(ra <= frames.ARENA_HALF + 1e-9 && rb >= -frames.ARENA_HALF - 1e-9, '右墙镜像不得出界');
+
+  const [la, lb] = separate(-frames.ARENA_HALF + 0.05, -frames.ARENA_HALF);
+  assert.ok(Math.abs(lb - la) >= need - 1e-9,
+    `左墙镜像间距 ${Math.abs(lb - la)} < ${need}（修复前为 0.4625）`);
+  assert.ok(lb >= -frames.ARENA_HALF - 1e-9 && la <= frames.ARENA_HALF + 1e-9, '左墙镜像不得出界');
+});

@@ -9,6 +9,7 @@ export class FixedLoop {
   private prev = 0;
   private rafId = 0;
   private running = false;
+  private hidden = false;
   private countedSteps = 0;
   private countedFrames = 0;
   private countedAt = 0;
@@ -18,24 +19,55 @@ export class FixedLoop {
     private readonly onRender: (alpha: number, dtMs: number) => void,
   ) {}
 
+  /** 统一的时间/统计基准：start() 与「从后台恢复」共用，关键是 acc 归零。 */
+  private resetTiming(now: number): void {
+    this.prev = now;
+    this.acc = 0;
+    this.countedAt = now;
+    this.countedSteps = 0;
+    this.countedFrames = 0;
+  }
+
+  private readonly onVisibility = (): void => {
+    if (document.hidden) {
+      this.hidden = true;
+    } else {
+      this.hidden = false;
+      // 后台积压的时间一律丢弃：格斗逻辑不该在切回时快进补步，
+      // 统计窗口也重新起算，避免 span 含后台时长把 fps/renderFps 稀释成 0。
+      this.resetTiming(performance.now());
+    }
+  };
+  private readonly onPageHide = (): void => { this.hidden = true; };
+  private readonly onPageShow = (): void => {
+    this.hidden = false;
+    this.resetTiming(performance.now());
+  };
+
   start(): void {
     if (this.running) return;
     this.running = true;
-    this.prev = performance.now();
-    this.countedAt = this.prev;
-    this.countedSteps = 0;
-    this.countedFrames = 0;
+    this.resetTiming(performance.now());
+    document.addEventListener('visibilitychange', this.onVisibility);
+    window.addEventListener('pagehide', this.onPageHide);
+    window.addEventListener('pageshow', this.onPageShow);
     this.rafId = requestAnimationFrame(this.tick);
   }
 
   stop(): void {
     this.running = false;
     cancelAnimationFrame(this.rafId);
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('pagehide', this.onPageHide);
+    window.removeEventListener('pageshow', this.onPageShow);
   }
 
   private tick = (now: number): void => {
     if (!this.running) return;
     this.rafId = requestAnimationFrame(this.tick);
+    // 后台偶发 rAF 也不能累积 acc，否则切回第一帧仍会一次性补步
+    if (this.hidden) { this.prev = now; return; }
+
     let dt = now - this.prev;
     this.prev = now;
     if (dt > 250) dt = 250;

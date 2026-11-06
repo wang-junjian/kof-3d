@@ -1,4 +1,4 @@
-import { ROUND_SECONDS, type ButtonId } from './frames';
+import { ROUND_SECONDS, type ButtonId, type MoveDef } from './frames';
 import { EMPTY_INPUT, QCF_WINDOW, detectQcf, type InputFrame } from './input';
 import { boxCenterX, boxCenterY, clampArena, overlaps, separate } from './hitbox';
 import type { AIController } from '../fighter/AI';
@@ -59,6 +59,13 @@ export class Match {
     this.beginRound(1);
   }
 
+  /** 清空跨帧输入残留，不重置回合 / 血量 / 胜场。回合切换与浏览器自检共用。 */
+  clearTransient(): void {
+    this.buffered.length = 0;
+    this.inputHistory.length = 0;
+    this.pendingQcf = null;
+  }
+
   private beginRound(n: number): void {
     this.round = n;
     // 竖屏场地比默认站位窄，开局就按当前边界收拢，避免第一帧两人站在画外。
@@ -68,9 +75,8 @@ export class Match {
     this.timerFrames = ROUND_SECONDS * 60;
     this.hitstop = 0;
     this.phaseFrames = 0;
-    this.inputHistory.length = 0; // 摇杆指令不跨回合残留
-    this.buffered.length = 0;     // 上一回合顿帧里按下的键也不该在新回合开局生效
-    this.pendingQcf = null;
+    // 摇杆指令不跨回合残留；上一回合顿帧里按下的键也不该在新回合开局生效。
+    this.clearTransient();
     this.phase = 'intro';
     this.cb.onRoundStart(n);
   }
@@ -124,7 +130,10 @@ export class Match {
     this.updateFacing();
     // 236 指令只在这里识别：intro / roundOver / matchOver 的帧不进输入历史，
     // 避免跨阶段残留误触发。detectQcf 产出绝对方向，facing 比对在 Fighter 里做。
-    const qcf = this.pendingQcf ?? this.track(input);
+    // 解冻帧是真实逻辑帧，必须先无条件记入历史（旧 ?? 短路会漏记这一帧），
+    // 再取指令值：pendingQcf（顿帧里已识别出的 236）优先，track 的返回值兜底。
+    const tracked = this.track(input);
+    const qcf = this.pendingQcf ?? tracked;
     this.pendingQcf = null;
     const command: InputFrame = qcf ? { ...input, qcf } : input;
     this.p1.update(command);
@@ -180,27 +189,41 @@ export class Match {
   }
 
   private resolveHits(): void {
+    // 同一逻辑帧内双方的判定框一律基于「结算前」状态快照：receiveHit 会立刻把
+    // 防守方切进 hitstun，若边遍历边结算，第二个配对回读 activeHitbox() 时
+    // 攻击者已被打断，整招会被吞掉（同帧互击恒为 p1 先手）。
+    // 遍历顺序固定 p1→p2，保证 onHit 派发顺序与回放确定性。
     const pairs: [Fighter, Fighter][] = [
       [this.p1, this.p2],
       [this.p2, this.p1],
     ];
+    type Shot = { atk: Fighter; def: Fighter; move: MoveDef; hx: number; hy: number };
+    const shots: Shot[] = [];
     for (const [atk, def] of pairs) {
       const hb = atk.activeHitbox();
-      if (!hb || !atk.move) continue;
+      const move = atk.move;
+      if (!hb || !move) continue;
       const hurt = def.hurtbox();
       if (!overlaps(hb, hurt)) continue;
-      const hx = boxCenterX(hb, hurt);
-      const hy = boxCenterY(hb, hurt);
-      const ev = def.receiveHit(atk.move, atk, hx, hy);
-      this.hitstop = ev.blocked
-        ? Math.max(2, Math.floor(ev.move.hitstop / 2))
-        : ev.move.hitstop;
+      shots.push({
+        atk, def, move,
+        hx: boxCenterX(hb, hurt),
+        hy: boxCenterY(hb, hurt),
+      });
+    }
+
+    for (const s of shots) {
+      const ev = s.def.receiveHit(s.move, s.atk, s.hx, s.hy);
+      const stop = ev.blocked
+        ? Math.max(2, Math.floor(s.move.hitstop / 2))
+        : s.move.hitstop;
+      // 互击取较长顿帧，消除旧「后者覆盖」的配对顺序依赖。
+      this.hitstop = Math.max(this.hitstop, stop);
       this.cb.onHit(ev);
     }
 
     // 受击会立刻切到 hitstun / blockstun / ko，此时被打断的旧招式已不成立。
-    // 在「全部配对结算完之后」统一清理，保持原有先手结算顺序不变，
-    // 同时让 snapshot().move 不再残留上一招（状态机与展示一致）。
+    // 在「全部配对结算完之后」统一清理，互击时两招都被打断，语义一致。
     for (const f of [this.p1, this.p2]) {
       if (f.state !== 'attack' && f.move) {
         f.move = null;
@@ -217,18 +240,20 @@ export class Match {
     else winner = this.p1.hp > this.p2.hp ? 0 : 1;
     if (winner !== null) this.fighters[winner].wins++;
 
-    const finished = (winner !== null && this.fighters[winner].wins >= 2) || this.round >= 3;
+    // 平局（TIME UP 同血量 / 同帧双 KO）不加胜场、不偏向任一方，也不结束比赛：
+    // 复用既有 roundOver → beginRound(round+1) 走加赛。只有分出单局胜负才可能结束。
+    const finished = winner !== null
+      && (this.fighters[winner].wins >= 2 || this.round >= 3);
     this.phase = finished ? 'matchOver' : 'roundOver';
     this.phaseFrames = 0;
     this.cb.onAnnounce(reason === 'ko' ? 'K.O.' : 'TIME UP');
     this.cb.onRoundEnd(winner, reason);
 
-    if (finished) {
-      let champ: 0 | 1;
-      if (winner !== null) champ = winner;
-      else champ = this.p1.wins >= this.p2.wins ? 0 : 1;
-      this.winner = champ;
-      this.cb.onMatchEnd(champ);
+    // finished 已含 winner !== null，这里显式再判一次让 TS narrow 到 0|1，
+    // 彻底移除「平局时按 p1.wins >= p2.wins 默认判 RIN 胜」的兜底偏向。
+    if (finished && winner !== null) {
+      this.winner = winner;
+      this.cb.onMatchEnd(winner);
     }
   }
 }

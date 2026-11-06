@@ -36,6 +36,11 @@ const check = (name, ok, detail = '') => {
 };
 const stages = (arr) => [...new Set(arr.map((t) => t.split(':')[0]))];
 
+// --smoke：只跑 boot 段的只读断言（页面零报错 / WebGL / 程序化角色 / 单文件
+// 体积与注入契约 / viewport / HUD / frame>30 / 开局状态），不截图、不打开 VRM
+// 页、不跑长时序链路。默认模式（无参数）仍执行全部 112 条断言，行为不变。
+const SMOKE = process.argv.includes('--smoke');
+
 // 几何精修前的运行时基线（由 RigView.skeletonSignature()/geometryStats() 实测）。
 // 骨架指纹逐字比对：任何一次改动碰到 JOINTS 层级、骨骼长度或末端局部坐标，
 // 都会让 limbs() 坐标探针与全部动作断言失效，必须在这里立刻失败。
@@ -53,6 +58,10 @@ const browser = await puppeteer.launch({
   ],
 });
 
+// try/finally：断言中途抛错、waitForFunction 超时、page.evaluate 异常时也必须关闭
+// Chrome，否则本地与 CI runner 会残留浏览器进程。try 覆盖「页面创建 → 报告写出」，结果汇总留在外。
+// 为保持后续 1200 余行主体零改动（避免重排模板字符串），块内语句沿用原缩进。
+try {
 const page = await browser.newPage();
 await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
 const pageErrors = [];
@@ -90,11 +99,32 @@ check('外形几何确实精修：三角面增加、方块件减少、网格规�
   first.rig.meshes < RIG_BASELINE.meshes * 1.75,
   `tris ${RIG_BASELINE.triangles}→${first.rig.triangles}, boxes ${RIG_BASELINE.boxes}→${first.rig.boxes}, meshes ${RIG_BASELINE.meshes}→${first.rig.meshes}`);
 const htmlSource = fs.readFileSync(target, 'utf8');
-const noFaceData = await page.evaluate(() => window.__KOF_FACES__ === undefined);
 const htmlBytes = fs.statSync(target).size;
-check('产物不含 2D 贴图链路（无内联图片 / 无注入数据）',
-  noFaceData && !htmlSource.includes('data:image/webp') && !htmlSource.includes('__KOF_FACES__'),
-  `html=${(htmlBytes / 1024).toFixed(0)} KB, injected=${!noFaceData}`);
+// 默认版由 scripts/inline.mjs 的 inject('') 产出，不注入任何 VRM / 2D 贴图数据。
+// __KOF_VRM__ 是真实存在的注入符号（src/main.ts 的 Window 声明与 embeddedVrm、
+// inline.mjs 的 dataScript），它的「缺席」是可失效契约：一旦 inject 逻辑误把
+// dataScript 塞进默认版，或默认版切到 VRM 渲染层，下面这条就会 FAIL。
+const payloadProbe = await page.evaluate(() => {
+  const s = window.__kof.snapshot();
+  return {
+    vrmInjected: typeof window.__KOF_VRM__ !== 'undefined',
+    mode: s.characterMode, textured: s.texturedMeshes, rig: s.rig !== null,
+  };
+});
+// 源码层只认「真实内联图片」：<img src="data:image/…">、CSS url(data:image/…)、
+// 或图片 base64 数据。GLTFLoader 内部有 startsWith("data:image/") 这样的字符串
+// 字面量，用宽泛的 includes 会把它误判成内联贴图（离线契约由 snapshot 黑盒保证）。
+const inlineImage = /(<img[^>]+src=["']?data:image\/|url\(["']?data:image\/|data:image\/[a-z]+;base64,)/i.test(htmlSource);
+check('默认版不含 2D 贴图 / VRM 注入，且确为纯程序化角色',
+  !payloadProbe.vrmInjected &&
+  !inlineImage &&
+  !htmlSource.includes('window.__KOF_VRM__=') &&
+  payloadProbe.mode === 'procedural' &&
+  payloadProbe.textured === 0 &&
+  payloadProbe.rig,
+  `html=${(htmlBytes / 1024).toFixed(0)} KB, mode=${payloadProbe.mode}, ` +
+  `textured=${payloadProbe.textured}, rig=${payloadProbe.rig}, ` +
+  `injectedVrm=${payloadProbe.vrmInjected}, inlineImage=${inlineImage}`);
 check('单文件仍控制在 1 MB 内（可离线双击打开）', htmlBytes < 1024 * 1024,
   `${(htmlBytes / 1024).toFixed(0)} KB`);
 check('viewport 锁缩放 + Web App 全屏声明已内联进单文件',
@@ -111,6 +141,10 @@ check('逻辑步/渲染帧双口径统计可用',
   first.fps > 0 && first.renderFps > 0,
   `logic=${first.fps}, render=${first.renderFps}`);
 check('开局满血、回合 1、intro 阶段', first.p1.hp === 100 && first.p2.hp === 100 && first.round === 1 && first.phase === 'intro', `phase=${first.phase}`);
+
+// --smoke 只跑上面 boot 段的只读断言；默认模式继续跑下面全部截图 / VRM 页 /
+// 动作系统 / 触屏手柄 / 竖屏视口链路。主体 1100 余行保持零改动，仅用块包裹。
+if (!SMOKE) {
 await page.screenshot({ path: path.join(shots, '01-boot.png') });
 
 await page.click('#boot');
@@ -762,8 +796,7 @@ const superProbe = await page.evaluate(() => {
   const ready = (meter) => {
     m.phase = 'fight';
     m.hitstop = 0;
-    m.buffered.length = 0;
-    m.inputHistory.length = 0;
+    m.clearTransient(); // 清 buffered + inputHistory + pendingQcf，与上方注释一致
     m.p1.meter = meter;
     for (const f of [m.p1, m.p2]) {
       f.state = 'idle'; f.move = null; f.moveFrame = 0; f.stunLeft = 0;
@@ -1280,7 +1313,10 @@ const report = {
   pageErrors, consoleErrors, failedRequests, results,
 };
 fs.writeFileSync(path.join(shots, 'report.json'), JSON.stringify(report, null, 2));
-await browser.close();
+}  // 闭合 if (!SMOKE)
+} finally {
+  await browser.close().catch(() => {});
+}
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n结果：${results.length - failed.length}/${results.length} 通过`);

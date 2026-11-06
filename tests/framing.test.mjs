@@ -71,3 +71,13 @@ test('动态边界注入：clampArena 与 separate 的靠墙补偿都跟着视�
   assert.equal(clampArena(99), frames.ARENA_HALF);
   assert.equal(clampArena(-99), -frames.ARENA_HALF);
 });
+
+test('取景契约：全 aspect 采样的可见半宽必须覆盖「场地 + 角色外侧余量」', () => {
+  for (const a of [0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.75, 0.9, 0.99]) {
+    const f = framingFor(a);
+    assert.ok(f.visibleHalf + 1e-9 >= f.arenaHalf + BODY_MARGIN,
+      `aspect=${a}: visibleHalf=${f.visibleHalf} < ${f.arenaHalf + BODY_MARGIN}，贴边角色会出画`);
+    assert.ok(f.cameraZ <= MAX_CAMERA_Z, `aspect=${a}: 机位突破上限`);
+    assert.ok(f.arenaHalf >= MIN_ARENA_HALF, `aspect=${a}: 场地容不下两人推挤盒`);
+  }
+});

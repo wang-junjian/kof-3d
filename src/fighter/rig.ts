@@ -453,3 +453,60 @@ export function createRig(p: CharacterPalette): Rig {
 
   return rig;
 }
+
+/**
+ * 视图 dispose 共用的资源所有权边界。
+ * GEO / GRAD_SKIN / GRAD_CLOTH / OUTLINE 由本模块持有、生命周期与页面等长：
+ * 两个程序化角色和攻击残影都在引用它们，任何一次视图销毁都不得释放。
+ * 其余按引用 Set 去重后释放，避免同一 texture/material 被多 mesh 共用时重复 dispose。
+ */
+export function disposeViewResources(
+  root: THREE.Object3D,
+  opts: { disposeGeometry: boolean },
+): void {
+  const sharedGeometries = new Set<THREE.BufferGeometry>(GEO.values());
+  const sharedMaterials = new Set<THREE.Material>([OUTLINE]);
+  const sharedTextures = new Set<THREE.Texture>([GRAD_SKIN, GRAD_CLOTH]);
+
+  const geometries = new Set<THREE.BufferGeometry>();
+  const skeletons = new Set<THREE.Skeleton>();
+  const materials = new Set<THREE.Material>();
+  const textures = new Set<THREE.Texture>();
+
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (opts.disposeGeometry && mesh.geometry && !sharedGeometries.has(mesh.geometry)) {
+      geometries.add(mesh.geometry);
+    }
+    const skinned = obj as THREE.SkinnedMesh;
+    if (skinned.skeleton) skeletons.add(skinned.skeleton);
+    const m = mesh.material;
+    if (m) {
+      const list: THREE.Material[] = Array.isArray(m) ? m : [m];
+      for (const mm of list) {
+        if (!sharedMaterials.has(mm)) materials.add(mm);
+      }
+    }
+  });
+
+  for (const m of materials) {
+    // 材质属性里挂的贴图（map/normalMap/...）与 ShaderMaterial uniforms 里的贴图
+    // 常被多个材质共用，先按引用收集、最后统一释放，避免重复 dispose。
+    for (const v of Object.values(m) as unknown[]) {
+      const t = v as THREE.Texture;
+      if (t && t.isTexture && !sharedTextures.has(t)) textures.add(t);
+    }
+    const shader = m as THREE.ShaderMaterial;
+    if (shader.uniforms) {
+      for (const u of Object.values(shader.uniforms)) {
+        const t = u.value as THREE.Texture;
+        if (t && t.isTexture && !sharedTextures.has(t)) textures.add(t);
+      }
+    }
+  }
+
+  for (const g of geometries) g.dispose();
+  for (const s of skeletons) s.dispose();
+  for (const t of textures) t.dispose();
+  for (const m of materials) m.dispose();
+}

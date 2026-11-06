@@ -201,3 +201,80 @@ test('restart 复位到第 1 局、满血、胜场清零', () => {
   assert.equal(m.hitstop, 0);
   assert.equal(events.resets, 1);
 });
+
+// ── 同帧互击 / 顿帧解冻帧 / 平局：三个此前恰好漏掉的边界 ──────────────
+
+test('同帧互击：双方 active 重叠时各结算一次，p2 的招式不再被整招吞掉', () => {
+  const { m, events } = makeMatch();
+  m.phase = 'fight';
+  m.hitstop = 0;
+  m.clearTransient();
+  m.p1.x = -0.35;
+  m.p2.x = 0.35;
+  for (const f of [m.p1, m.p2]) {
+    f.state = 'idle'; f.move = null; f.moveFrame = 0; f.hasHit = false; f.stunLeft = 0;
+    f.y = 0; f.vx = 0; f.vy = 0;
+    f.airborne = false; f.guarding = false; f.crouching = false;
+  }
+  // 下一次 update 后两人正好落在各自 active 首帧（startup-1 → +1 = startup）
+  m.p1.startMove('LP');
+  m.p1.moveFrame = frames.MOVES.LP.startup - 1;
+  m.p2.startMove('SUPER');
+  m.p2.moveFrame = frames.MOVES.SUPER.startup - 1;
+
+  m.step(EMPTY);
+
+  assert.equal(events.hits, 2, '互击应派发 2 次 onHit，修复前只有 1 次');
+  assert.equal(m.p1.hp, frames.MAX_HP - frames.MOVES.SUPER.damage, 'p1 必须吃到 SUPER 伤害');
+  assert.equal(m.p2.hp, frames.MAX_HP - frames.MOVES.LP.damage, 'p2 必须吃到 LP 伤害');
+  assert.equal(m.hitstop, frames.MOVES.SUPER.hitstop, '互击顿帧取较长者');
+});
+
+test('pendingQcf 解冻帧仍记入 236 历史：history +1 且 POW 只扣一次', () => {
+  const m = readySuper();
+  m.hitstop = 3;
+  for (const f of [
+    F({ down: true }),
+    F({ down: true, dir: 1 }),
+    F({ dir: 1, buttons: ['HP'] }),  // 该顿帧识别出 236 → pendingQcf=1
+  ]) assert.equal(m.step(f), true, '顿帧必须报告冻结');
+  assert.equal(m.inputHistory.length, 3, '3 个顿帧各记一帧');
+  assert.equal(m.pendingQcf, 1);
+
+  m.step(EMPTY);  // 解冻后的第一个逻辑帧
+
+  assert.equal(m.inputHistory.length, 4, '解冻帧是真实逻辑帧，必须进入 236 历史（修复前仍为 3）');
+  assert.equal(m.p1.move?.id, 'SUPER');
+  assert.equal(m.p1.meter, 100 - frames.SUPER_COST);
+  assert.equal(m.pendingQcf, null);
+});
+
+test('第 3 局同血量 TIME UP 平局：不偏向 p1，走加赛 roundOver', () => {
+  const { m, events } = makeMatch();
+  m.phase = 'fight';
+  m.hitstop = 0;
+  m.clearTransient();
+  m.round = 3;
+  m.p1.wins = 1;
+  m.p2.wins = 1;
+  m.p1.hp = 50;
+  m.p2.hp = 50;
+  m.p1.x = -2;
+  m.p2.x = 2;  // 拉开距离，确保本帧无命中、hp 保持相等
+  for (const f of [m.p1, m.p2]) {
+    f.state = 'idle'; f.move = null; f.moveFrame = 0; f.hasHit = false; f.stunLeft = 0;
+    f.y = 0; f.vx = 0; f.vy = 0;
+    f.airborne = false; f.guarding = false; f.crouching = false;
+  }
+  m.timerFrames = 1;  // 下一帧 step 末尾 → 0 → endRound()
+
+  m.step(EMPTY);
+
+  assert.equal(events.roundEnd.r, 'time');
+  assert.equal(events.roundEnd.w, null, '同血量判平局');
+  assert.equal(m.p1.wins, 1, '平局不加胜场');
+  assert.equal(m.p2.wins, 1, '平局不加胜场');
+  assert.equal(m.winner, null, '平局不得默认判 p1 胜（修复前为 0）');
+  assert.equal(events.matchEnd, null, '平局不应触发 onMatchEnd');
+  assert.equal(m.phase, 'roundOver', '平局走加赛，不进 matchOver');
+});

@@ -19,10 +19,18 @@ if (cssFiles.length > 1) {
 const js = fs.readFileSync(path.join(dist, jsFiles[0]), 'utf8');
 const css = cssFiles.length === 1 ? fs.readFileSync(path.join(dist, cssFiles[0]), 'utf8') : '';
 
+// 构建期不变量（内联前）：产物会被普通 <script> 内联，import.meta 在这种上下文
+// 里是 SyntaxError；用全局文本替换去「修」又会误伤字符串字面量，并把
+// import.meta.url / import.meta.env.* 悄悄改成错误语义。宁可显式失败，也不静默改写。
+// 注意：只统计产物 js 与最终 HTML，不对本脚本源码里的正则字面量计数。
+const metaBefore = (js.match(/\bimport\.meta\b/g) ?? []).length;
+if (metaBefore !== 0) {
+  throw new Error(
+    `dist/game.js 仍含 ${metaBefore} 处 import.meta；请在源码层消除或用 vite define 处理，禁止全局文本替换`,
+  );
+}
 // 普通 script 内联，避免 file:// 下 module 的 CORS 限制
-const safeJs = js
-  .replace(/<\/script/gi, '<\\/script')
-  .replace(/\bimport\.meta\b/g, '({ url: location.href, env: {} })');
+const safeJs = js.replace(/<\/script/gi, '<\\/script');
 const safeCss = css.replace(/<\/style/gi, '<\\/style');
 
 const jsTag = /<script[^>]*src="[^"]*"[^>]*><\/script>/i;
@@ -47,7 +55,13 @@ if (template.includes('./game.js') || template.includes('./game.css')) {
 const vrmPath = path.join(root, 'assets/character.vrm');
 const vrmBase64 = fs.existsSync(vrmPath) ? fs.readFileSync(vrmPath).toString('base64') : '';
 const dataScript = vrmBase64 ? `<script>window.__KOF_VRM__="${vrmBase64}";</script>\n` : '';
-const inject = (data) => template.replace(/<\/body>/i, () => `${data}<script>\n${safeJs}\n</script>\n</body>`);
+// 后置断言（内联后）：最终单文件里同样不允许残留 import.meta（覆盖 CSS 与注入片段）。
+const inject = (data) => {
+  const out = template.replace(/<\/body>/i, () => `${data}<script>\n${safeJs}\n</script>\n</body>`);
+  const metaAfter = (out.match(/\bimport\.meta\b/g) ?? []).length;
+  if (metaAfter !== 0) throw new Error(`单文件产物残留 ${metaAfter} 处 import.meta（内联后）`);
+  return out;
+};
 
 const defaultHtml = inject('');
 const out = path.join(root, 'kof-3d.html');

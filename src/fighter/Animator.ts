@@ -346,7 +346,12 @@ const ATTACKS: Record<PoseKey, { windup: Pose; strike: Pose; follow: Pose }> = {
   },
 };
 
-/** 预分配姿态缓冲：每帧复用，避免 13 组 V3 与 Pose 对象反复进 GC。 */
+/**
+ * 姿态缓冲：复用于最终 displayed 的双缓冲，以及 crouch/guard/落地等分支的中间结果。
+ * 注意 idlePose/walkPose/attackPose/jumpPose/stunPose 里的 withBase() 与不传 out 的
+ * blend() 仍按渲染帧新建 Pose 与 V3；这些短命小对象两角色 60fps 也就数百 KB/s，
+ * 由 GC 新生代即可吸收，不值得为此把整条姿态链改造成缓冲池。
+ */
 function makePoseBuffer(): Pose {
   const j: JointAngles = {};
   for (const name of JOINTS) j[name] = [0, 0, 0];
@@ -518,7 +523,8 @@ const DEBUG_JOINTS: JointName[] = ['torso', 'head', 'shoulderL', 'shoulderR', 'h
 export class Animator {
   private displayed: Pose = withBase({});
   private entryPose: Pose = withBase({});
-  /** displayed 双缓冲：读上一帧、写另一块，保证 maxDelta 拿到的是真正的前一帧姿态。 */
+  /** displayed 双缓冲：读上一帧、写另一块，保证 maxDelta 拿到的是真正的前一帧姿态；
+   *  复用的是最终输出缓冲，中间姿态仍按帧新建（见 makePoseBuffer 上方说明）。 */
   private readonly bufA: Pose = makePoseBuffer();
   private readonly bufB: Pose = makePoseBuffer();
   private readonly targetBuf: Pose = makePoseBuffer();

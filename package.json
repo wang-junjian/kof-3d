@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build && node scripts/inline.mjs",
     "test": "node scripts/bundle-logic.mjs && node --test tests/*.test.mjs",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "smoke": "node scripts/verify.mjs --smoke"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.5",

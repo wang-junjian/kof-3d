@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Fighter } from './Fighter';
 import type { CharacterView, Pose, V3 } from './CharacterView';
-import type { JointName, Rig } from './rig';
+import { disposeViewResources, type JointName, type Rig } from './rig';
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 const ZERO: V3 = [0, 0, 0];
@@ -169,5 +169,13 @@ export class RigView implements CharacterView {
   dispose(): void {
     this.root.removeFromParent();
     this.shadow.removeFromParent();
+    // 不释放 root 下的 geometry：模块级 GEO 缓存与 Fx 里最多存活 10 帧的攻击残影
+    // （ghost() 用 this.root.clone(true)，与本体共享几何）都还引用它们，释放会让残影渲染出错。
+    // 材质除共享的 OUTLINE 描边壳外均为本实例私有，可安全释放。
+    disposeViewResources(this.rig.root, { disposeGeometry: false });
+    // shadow 不在 rig.root 下，几何与材质都是本实例新建，单独释放
+    const shadow = this.rig.shadow;
+    shadow.geometry.dispose();
+    (shadow.material as THREE.Material).dispose();
   }
 }
