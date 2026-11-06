@@ -2,7 +2,9 @@
 
 原创角色的 1v1 单机 3D 格斗网页切片（Three.js + Vite + TypeScript）。致敬式借鉴格斗游戏规则，不使用 SNK 角色与「拳皇」名称；角色为原创成年女性格斗家，时尚竞技路线。
 
-> **在线试玩 / Play online**：<https://wang-junjian.github.io/kof-3d/> — 打开即玩、零安装；手机横屏自动出现虚拟键，标准手柄即插即用。试玩页同时提供 `kof-3d.html` 供下载后离线双击打开。
+> **在线试玩 / Play online**：<https://wangjunjian.com/kof-3d/> — 打开即玩、零安装；手机横屏自动出现虚拟键，标准手柄即插即用。试玩页同时提供 `kof-3d.html` 供下载后离线双击打开。
+>
+> **备用地址 / Fallback**：<https://wang-junjian.github.io/kof-3d/>（GitHub Pages 官方入口，会自动 301 跳转到上面的自定义域；主站域名变更时仍可访问）。
 >
 > **开源仓库**：<https://github.com/wang-junjian/kof-3d> · **MIT License**（见 [LICENSE](LICENSE)）· 第三方素材出处见 [CREDITS.md](CREDITS.md)。
 >
@@ -33,9 +35,9 @@ npm run dev         # 开发模式（Vite，127.0.0.1）
 
 ### 在线试玩 / Play online
 
-<https://wang-junjian.github.io/kof-3d/>
+<https://wangjunjian.com/kof-3d/>
 
-`index.html` 就是构建出的 `kof-3d.html`，同目录另有 `kof-3d.html` 可直接下载离线游玩。部署走官方 `actions/deploy-pages`：push 到 `main` 触发 `npm ci → npm test → typecheck → build → upload-pages-artifact → deploy`，也可在 Actions 里手动 `workflow_dispatch` 重跑。CI 不跑 `npm run verify`（需要本机 Chrome），浏览器自检在本地验收时完成。仓库**不提交任何构建产物**，Pages 的内容完全由 Actions 从源码重建。
+`index.html` 就是构建出的 `kof-3d.html`，同目录另有 `kof-3d.html` 可直接下载离线游玩。自定义域来自用户站点仓库 `wang-junjian/wang-junjian.github.io` 已绑定的 `wangjunjian.com`：本仓库启用 Pages 后，项目站点自动挂到该域的 `/kof-3d/` 路径下，所以 `wang-junjian.github.io/kof-3d/` 会 301 跳转到这里（备用地址见文首）。两个入口返回的是同一份产物，可用 SHA256 复核；本仓库不配置 CNAME、不改动域名或 DNS。部署走官方 `actions/deploy-pages`：push 到 `main` 触发 `npm ci → npm test → typecheck → build → upload-pages-artifact → deploy`，也可在 Actions 里手动 `workflow_dispatch` 重跑。CI 不跑 `npm run verify`（需要本机 Chrome），浏览器自检在本地验收时完成。仓库**不提交任何构建产物**，Pages 的内容完全由 Actions 从源码重建。
 
 ---
 
