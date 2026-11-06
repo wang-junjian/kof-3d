@@ -1,6 +1,6 @@
 import { ROUND_SECONDS, type ButtonId } from './frames';
 import { QCF_WINDOW, detectQcf, type InputFrame } from './input';
-import { boxCenterX, boxCenterY, overlaps, separate } from './hitbox';
+import { boxCenterX, boxCenterY, clampArena, overlaps, separate } from './hitbox';
 import type { AIController } from '../fighter/AI';
 import { Fighter, type HitEvent } from '../fighter/Fighter';
 
@@ -59,8 +59,9 @@ export class Match {
 
   private beginRound(n: number): void {
     this.round = n;
-    this.p1.resetForRound(-1.5, 1);
-    this.p2.resetForRound(1.5, -1);
+    // 竖屏场地比默认站位窄，开局就按当前边界收拢，避免第一帧两人站在画外。
+    this.p1.resetForRound(clampArena(-1.5), 1);
+    this.p2.resetForRound(clampArena(1.5), -1);
     this.ai.reset();
     this.timerFrames = ROUND_SECONDS * 60;
     this.hitstop = 0;
@@ -140,7 +141,9 @@ export class Match {
   }
 
   private resolvePush(): void {
-    const [a, b] = separate(this.p1.x, this.p2.x);
+    // 视口变窄（旋转 / 全屏切换 / 地址栏收起）时，已在场外的角色下一帧
+    // 就被拉回新边界；setPose 之类调试钩子直接写 x 也能被收拢。
+    const [a, b] = separate(clampArena(this.p1.x), clampArena(this.p2.x));
     this.p1.x = a;
     this.p2.x = b;
   }

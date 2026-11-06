@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import {
+  BASE_FOV, BODY_MARGIN, MAX_CAMERA_Z, framingFor, visibleHalf, zForWidth,
+  type Framing,
+} from './Framing';
 
 export interface CameraDebug {
   /** 命中推镜强度 0..1，指数回弹到 0。 */
@@ -11,38 +15,77 @@ export interface CameraDebug {
   lookX: number;
 }
 
+/** 视口取景探针：自检用它做「两人始终入画」的真实投影断言。 */
+export interface FramingProbe {
+  aspect: number;
+  /** 竖屏：场地收窄、镜头跟紧、演出减弱。 */
+  portrait: boolean;
+  /** 基准相机距离。 */
+  cameraZ: number;
+  /** 当前相机距离（含动态拉远）。 */
+  z: number;
+  /** 当前允许的角色活动半宽。 */
+  arenaHalf: number;
+  /** 当前 FOV / 距离下 z=0 平面的横向可见半宽。 */
+  visibleHalf: number;
+  fov: number;
+  lookX: number;
+  /** 两名角色当前世界 x 在相机下的 NDC 横坐标；绝对值 <= 1 即在画面内。 */
+  ndc: [number, number];
+}
+
 /**
  * 固定侧视 2.5D 镜头：跟随两人中点、随距离拉远，命中时震屏 + 短促推镜，KO 走低机位特写。
- * 推镜用 FOV 收窄而非拉近距离，避免破坏 update() 里按 aspect 反算的「两人始终入画」约束。
+ *
+ * 横屏保持原有视差与演出；竖屏（aspect < 1）改由 Framing 契约收紧场地、
+ * 跟紧中点并减弱偏心，最后用真实投影做硬性兜底，保证两人绝不出画。
  */
 export class GameCamera {
   readonly cam: THREE.PerspectiveCamera;
   private shake = 0;
   private seed = 991;
   private readonly baseY = 1.55;
-  private readonly baseFov = 34;
   private x = 0;
   private z = 6.4;
   private aspect = 1.6;
+  private framing: Framing;
   private zoom = 0;
   private focusX = 0;
   private koZoom = 0;
   private koTarget = 0;
   private koFocusX = 0;
-  private lastFov = 34;
+  private lastFov = BASE_FOV;
   private lookX = 0;
+  private readonly probeVec = new THREE.Vector3();
+  private ndc: [number, number] = [0, 0];
+  private currentVisibleHalf = 0;
 
   constructor(aspect: number) {
     this.aspect = aspect;
-    this.cam = new THREE.PerspectiveCamera(this.baseFov, aspect, 0.1, 100);
+    this.framing = framingFor(aspect);
+    this.z = this.framing.cameraZ;
+    this.currentVisibleHalf = this.framing.visibleHalf;
+    this.cam = new THREE.PerspectiveCamera(BASE_FOV, aspect, 0.1, 100);
     this.cam.position.set(0, this.baseY, this.z);
     this.cam.lookAt(0, 1.02, 0);
   }
 
+  /** 视口适配层从这里同步场地边界，保证相机与逻辑层读的是同一份契约。 */
+  get framingState(): Framing {
+    return this.framing;
+  }
+
   resize(aspect: number): void {
     this.aspect = aspect;
+    this.framing = framingFor(aspect);
     this.cam.aspect = aspect;
     this.cam.updateProjectionMatrix();
+    // 旋转进窄视口时立刻拉远（拉远只会多看见、不会出画）；拉近仍走平滑。
+    if (this.framing.cameraZ > this.z) {
+      this.z = this.framing.cameraZ;
+      this.cam.position.z = this.z;
+    }
+    this.currentVisibleHalf = visibleHalf(this.z, this.cam.fov, aspect);
   }
 
   punch(strength: number): void {
@@ -77,6 +120,30 @@ export class GameCamera {
     };
   }
 
+  framingProbe(): FramingProbe {
+    return {
+      aspect: this.aspect,
+      portrait: this.framing.portrait,
+      cameraZ: this.framing.cameraZ,
+      z: this.z,
+      arenaHalf: this.framing.arenaHalf,
+      visibleHalf: this.currentVisibleHalf,
+      fov: this.cam.fov,
+      lookX: this.lookX,
+      ndc: [this.ndc[0], this.ndc[1]],
+    };
+  }
+
+  /** 用当前相机矩阵把任意两个世界 x 投影到 NDC，供自检验证极端站位。 */
+  project(x1: number, x2: number): [number, number] {
+    this.cam.updateMatrixWorld();
+    return [this.projectX(x1), this.projectX(x2)];
+  }
+
+  private projectX(x: number): number {
+    return this.probeVec.set(x, 1.02, 0).project(this.cam).x;
+  }
+
   private rnd(): number {
     this.seed = (this.seed * 1664525 + 1013904223) >>> 0;
     return this.seed / 4294967296;
@@ -85,25 +152,33 @@ export class GameCamera {
   update(p1x: number, p2x: number): void {
     const mid = (p1x + p2x) / 2;
     const gap = Math.abs(p1x - p2x);
-    const wantX = mid * 0.45;
-    // 竖屏时横向视野会急剧收窄，按 aspect 反算所需距离，保证两人始终入画
-    const halfFov = (this.baseFov * Math.PI) / 360;
-    // 余量要覆盖角色自身宽度，否则两人虽"在画面内"但外侧肩膀会被裁掉
-    const zForWidth = (gap / 2 + 1.10) / (Math.tan(halfFov) * this.aspect);
+    const portrait = this.framing.portrait;
+
     this.zoom *= 0.86;
     if (this.zoom < 0.002) this.zoom = 0;
     this.focusX *= 0.88;
     this.koZoom += (this.koTarget - this.koZoom) * 0.055;
 
-    const fov = this.baseFov - this.zoom * 2.6 - this.koZoom * 4.4;
+    // 竖屏大幅减弱推镜：FOV 收窄会同步缩小可见宽度，可见性优先于演出。
+    const fov = BASE_FOV
+      - this.zoom * (portrait ? 1.2 : 2.6)
+      - this.koZoom * (portrait ? 2.0 : 4.4);
     if (Math.abs(fov - this.lastFov) > 0.005) {
       this.cam.fov = fov;
       this.lastFov = fov;
       this.cam.updateProjectionMatrix();
     }
-    // KO 时允许轻微压近，幅度刻意小于推镜，避免把败者推出画外
-    const wantZ = Math.max(5.55 + gap * 0.28, Math.min(14, zForWidth)) - this.koZoom * 0.42;
-    this.x += (wantX - this.x) * 0.065;
+
+    // 横屏保留原有轻微视差；竖屏跟紧两人中点，否则整组人会偏出窄画面。
+    const wantX = portrait ? mid : mid * 0.45;
+    this.x += (wantX - this.x) * (portrait ? 0.30 : 0.065);
+
+    // 按当前 FOV 反算，推镜收窄时同步补偿可见宽度；横屏沿用原本 1.10 的余量。
+    const needHalf = gap / 2 + (portrait ? BODY_MARGIN : 1.10);
+    const wantZ = Math.max(
+      portrait ? this.framing.cameraZ : 5.55 + gap * 0.28,
+      Math.min(MAX_CAMERA_Z, zForWidth(needHalf, fov, this.aspect)),
+    ) - this.koZoom * 0.42;
     this.z += (wantZ - this.z) * 0.045;
 
     let sx = 0;
@@ -115,8 +190,29 @@ export class GameCamera {
     } else {
       this.shake = 0;
     }
-    this.lookX = this.x * 0.55 + this.focusX + this.koFocusX * this.koZoom * 0.42;
+
+    // 竖屏几乎不偏心：命中推镜与 KO 特写都不能把另一侧角色挤出去。
+    this.lookX = portrait
+      ? this.x + this.focusX * 0.12 + this.koFocusX * this.koZoom * 0.08
+      : this.x * 0.55 + this.focusX + this.koFocusX * this.koZoom * 0.42;
     this.cam.position.set(this.x + sx, this.baseY + sy - this.koZoom * 0.10, this.z);
     this.cam.lookAt(this.lookX, 1.02 - this.koZoom * 0.06, 0);
+    this.cam.updateMatrixWorld();
+
+    // 硬兜底：用真实投影判定而非公式假设。无论推镜、KO 偏心、镜头滞后、
+    // 旋转瞬间还是调试摆拍，两人中心都必须留在画面内（边缘留 4%~8%）。
+    let n1 = this.projectX(p1x);
+    let n2 = this.projectX(p2x);
+    const limit = portrait ? 0.92 : 0.96;
+    const worst = Math.max(Math.abs(n1), Math.abs(n2));
+    if (worst > limit) {
+      this.z = Math.min(MAX_CAMERA_Z, this.z * (worst / limit));
+      this.cam.position.z = this.z;
+      this.cam.updateMatrixWorld();
+      n1 = this.projectX(p1x);
+      n2 = this.projectX(p2x);
+    }
+    this.ndc = [n1, n2];
+    this.currentVisibleHalf = visibleHalf(this.z, fov, this.aspect);
   }
 }

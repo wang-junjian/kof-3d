@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import './style.css';
 import { FixedLoop } from './core/loop';
 import { InputBuffer, QCF_WINDOW } from './core/input';
+import { clampArena, setArenaHalf } from './core/hitbox';
 import { Match } from './core/match';
 import { MOVES, SUPER_COST, type MoveId } from './core/frames';
 import type { FighterState } from './core/state';
@@ -12,7 +13,7 @@ import { loadVrmViews, VrmView } from './fighter/VrmView';
 import type { CharacterView } from './fighter/CharacterView';
 import { Animator, sampleAttackTags, type AnimDebug } from './fighter/Animator';
 import { Stage } from './view/Stage';
-import { GameCamera, type CameraDebug } from './view/Camera';
+import { GameCamera, type CameraDebug, type FramingProbe } from './view/Camera';
 import { Fx, type FxProbe } from './view/Fx';
 import { DebugBoxes } from './view/Debug';
 import { Hud } from './view/Hud';
@@ -50,6 +51,8 @@ interface KofSnapshot {
   debugBoxes: number;
   /** 镜头演出状态（命中推镜 / KO 特写）。 */
   camera: CameraDebug;
+  /** 视口取景：场地半宽、可见半宽与两人真实投影，供竖屏入画断言读取。 */
+  framing: FramingProbe;
   /** 打击演出分项计数：counts = 当前存活，totals = 累计触发。 */
   fx: FxProbe;
   /** 视觉时间：Hitstop 期间刻意冻结，与逻辑帧无关。 */
@@ -111,6 +114,11 @@ interface KofApi {
     exit: () => Promise<void>;
     toggle: () => Promise<void>;
   };
+  /** 取景探针：把任意两个世界 x 投到 NDC，验证极端站位是否仍在画面内。 */
+  framing: {
+    probe: () => FramingProbe;
+    project: (x1: number, x2: number) => [number, number];
+  };
 }
 
 declare global {
@@ -133,6 +141,8 @@ renderer.toneMapping = THREE.NoToneMapping;
 
 const stage = new Stage();
 const gameCamera = new GameCamera(window.innerWidth / window.innerHeight);
+// 必须在 Match 构造（会按边界摆开局站位）之前下发：竖屏场地比默认 ±1.5 窄。
+setArenaHalf(gameCamera.framingState.arenaHalf);
 const fx = new Fx(stage.scene);
 const hud = new Hud(hudRoot);
 const sfx = new Sfx();
@@ -243,6 +253,11 @@ const onResize = (): void => {
   const h = window.innerHeight;
   renderer.setSize(w, h, false);
   gameCamera.resize(w / h);
+  // 取景与场地边界必须由同一个 aspect 推导；旋转 / 全屏切换后立刻收拢站位，
+  // 不等下一逻辑帧，否则会先闪一帧「人在画外」。
+  setArenaHalf(gameCamera.framingState.arenaHalf);
+  match.p1.x = clampArena(match.p1.x);
+  match.p2.x = clampArena(match.p2.x);
 };
 let resizeQueued = false;
 const scheduleResize = (): void => {
@@ -466,6 +481,10 @@ window.__kof = {
     exit: () => screen.exit(),
     toggle: () => screen.toggle(),
   },
+  framing: {
+    probe: () => gameCamera.framingProbe(),
+    project: (x1, x2) => gameCamera.project(x1, x2),
+  },
   setJoint: (joint, angles) => {
     const v = views[0];
     if (v instanceof RigView) v.setOverride(joint, angles);
@@ -500,6 +519,7 @@ window.__kof = {
     debug: debug.enabled,
     debugBoxes: debug.count,
     camera: gameCamera.inspect(),
+    framing: gameCamera.framingProbe(),
     fx: fx.inspect(),
     visualTime: time,
     comboText: document.getElementById('combo1')?.textContent ?? '',

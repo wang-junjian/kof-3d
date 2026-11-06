@@ -35,11 +35,28 @@ export function boxCenterY(a: WorldBox, b: WorldBox): number {
   return (Math.max(a.minY, b.minY) + Math.min(a.maxY, b.maxY)) / 2;
 }
 
-export function clampArena(x: number): number {
-  return Math.max(-ARENA_HALF, Math.min(ARENA_HALF, x));
+/**
+ * 当前场地半宽。默认等于 ARENA_HALF；视口适配层（main.ts 的 resize 入口）
+ * 会在竖屏时把窗口可见宽度换算成更小的边界注入进来。
+ * 这是「屏幕有多宽」的物理约束，不是游戏规则，帧表 / 判定框 / 推挤盒都不变。
+ */
+let arenaHalf = ARENA_HALF;
+
+/** 注入当前视口允许的场地半宽；下限保证两人推挤盒仍能站开。 */
+export function setArenaHalf(next: number): void {
+  if (!Number.isFinite(next)) return;
+  arenaHalf = Math.max(PUSH_HALF * 2 + 0.2, Math.min(ARENA_HALF, next));
 }
 
-/** 推挤盒不允许两人重叠；被墙卡住时把剩余位移补给另一侧。 */
+export function getArenaHalf(): number {
+  return arenaHalf;
+}
+
+export function clampArena(x: number): number {
+  return Math.max(-arenaHalf, Math.min(arenaHalf, x));
+}
+
+/** 推挤盒不允许两人重叠；被墙卡住时把剩余位移补给另一侧（墙位置随视口变化）。 */
 export function separate(ax: number, bx: number): [number, number] {
   const d = bx - ax;
   const need = PUSH_HALF * 2;
@@ -50,8 +67,8 @@ export function separate(ax: number, bx: number): [number, number] {
   let nb = clampArena(bx + sign * half);
   if (Math.abs(nb - na) < need) {
     const rest = need - Math.abs(nb - na);
-    if (na <= -ARENA_HALF + 0.001) nb = clampArena(nb + sign * rest);
-    else if (nb >= ARENA_HALF - 0.001) na = clampArena(na - sign * rest);
+    if (na <= -arenaHalf + 0.001) nb = clampArena(nb + sign * rest);
+    else if (nb >= arenaHalf - 0.001) na = clampArena(na - sign * rest);
     else { na = clampArena(na - sign * rest / 2); nb = clampArena(nb + sign * rest / 2); }
   }
   return [na, nb];

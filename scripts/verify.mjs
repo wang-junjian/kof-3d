@@ -74,6 +74,11 @@ check('页面无 pageerror', pageErrors.length === 0, pageErrors.join(' | '));
 check('页面无 console.error', consoleErrors.length === 0, consoleErrors.join(' | '));
 check('无外部资源请求失败（离线零依赖）', failedRequests.length === 0, failedRequests.join(' | '));
 check('WebGL 上下文正常', !first.glLost && first.canvas.w > 0 && first.canvas.h > 0, `${first.canvas.w}x${first.canvas.h}`);
+check('桌面横屏不启用竖屏收缩（场地仍为 3.35、机位保持原值）',
+  !first.framing.portrait && Math.abs(first.framing.arenaHalf - 3.35) < 1e-6 &&
+  Math.abs(first.framing.cameraZ - 6.4) < 1e-6 &&
+  first.framing.ndc.every((n) => Number.isFinite(n) && Math.abs(n) <= 0.96),
+  `aspect=${first.framing.aspect.toFixed(2)}, arenaHalf=${first.framing.arenaHalf}, cameraZ=${first.framing.cameraZ}`);
 check('默认渲染层为程序化角色', first.characterMode === 'procedural', `mode=${first.characterMode}`);
 check('纯 3D 几何角色：零贴图材质网格', first.texturedMeshes === 0, `texturedMeshes=${first.texturedMeshes}`);
 check('骨架指纹未变（层级 / 关节坐标 / 马尾链长度）',
@@ -1135,7 +1140,128 @@ check('快速连点攻击键：不双击放大、两次输入都送达、捏合/
   `taps=${dblTap.taps}, scale=${dblTap.scale}, dbl=${dblTap.dbl}, gesture=${dblTap.gesture}, multi=${dblTap.multi}, move=${dblTap.move}`);
 await mobilePage.close();
 
-check('全程无 pageerror / console.error / 失败请求（含移动端视口）',
+// ── 竖屏实机视口：复现用户报的「两人跑出窗口」，用真实投影验证修复 ─────────
+const portraitPage = await browser.newPage();
+await portraitPage.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+portraitPage.on('pageerror', (e) => pageErrors.push(`[portrait] ${e}`));
+portraitPage.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(`[portrait] ${m.text()}`); });
+portraitPage.on('requestfailed', (r) => failedRequests.push(`[portrait] ${r.url()}`));
+// headless 没有真实窗口：全屏与方向锁打桩，避免自动锁横屏把竖屏视口改掉。
+await portraitPage.evaluateOnNewDocument(() => {
+  window.__fsCalls = 0;
+  Element.prototype.requestFullscreen = function () {
+    window.__fsCalls++;
+    return Promise.resolve();
+  };
+  try {
+    Object.defineProperty(screen, 'orientation', {
+      configurable: true,
+      value: {
+        type: 'portrait-primary', angle: 0,
+        lock: () => Promise.reject(new Error('orientation stub')),
+        unlock: () => {},
+      },
+    });
+  } catch { /* 实例属性只读时跳过：headless 本来也不提供 lock */ }
+});
+await portraitPage.goto(`file://${target}`, { waitUntil: 'load' });
+await portraitPage.waitForFunction('window.__kof && window.__kof.ready === true', { timeout: 25000 });
+await sleep(500);
+const portraitBoot = await portraitPage.evaluate(() => ({
+  innerW: window.innerWidth, innerH: window.innerHeight,
+  framing: window.__kof.framing.probe(),
+  p1: window.__kof.match.p1.x, p2: window.__kof.match.p2.x,
+  hint: document.getElementById('portrait-hint')?.textContent ?? '',
+  hintVisible: getComputedStyle(document.getElementById('portrait-hint')).display !== 'none',
+}));
+check('竖屏 390×844 自动收窄场地并把机位拉到刚好入画',
+  portraitBoot.innerW === 390 && portraitBoot.innerH === 844 &&
+  portraitBoot.framing.portrait && portraitBoot.framing.arenaHalf < 3.35 &&
+  portraitBoot.framing.arenaHalf > 0.6 && portraitBoot.framing.cameraZ > 6.4 &&
+  portraitBoot.framing.visibleHalf > portraitBoot.framing.arenaHalf + 0.5,
+  `aspect=${portraitBoot.framing.aspect.toFixed(3)}, arenaHalf=${portraitBoot.framing.arenaHalf.toFixed(2)}, ` +
+  `cameraZ=${portraitBoot.framing.cameraZ.toFixed(2)}, visibleHalf=${portraitBoot.framing.visibleHalf.toFixed(2)}`);
+check('竖屏开局站位按新边界收拢，并提示竖屏已适配',
+  Math.abs(portraitBoot.p1) <= portraitBoot.framing.arenaHalf + 1e-6 &&
+  Math.abs(portraitBoot.p2) <= portraitBoot.framing.arenaHalf + 1e-6 &&
+  portraitBoot.hint.includes('自动收窄') && portraitBoot.hintVisible,
+  `p1=${portraitBoot.p1.toFixed(2)}, p2=${portraitBoot.p2.toFixed(2)}, half=${portraitBoot.framing.arenaHalf.toFixed(2)}`);
+
+await portraitPage.click('#boot');
+await sleep(900);
+// NDC 是每帧由真实相机矩阵投影出来的（不是公式估算）：|值| <= 0.92 表示连肩膀都留有余量。
+const inView = (pair) => pair.every((n) => Number.isFinite(n) && Math.abs(n) <= 0.92);
+const fmt = (pair) => pair.map((n) => n.toFixed(3)).join(', ');
+// setPose 冻结逻辑但渲染 / 相机更新照常跑：把两人摆到极端站位后等镜头跟随稳定，
+// 再读实时 NDC —— 验证的是「玩家真的会看到什么」，而不是拿旧机位投影新坐标。
+const framingCase = (x1, x2) => portraitPage.evaluate(async ({ x1, x2 }) => {
+  const k = window.__kof;
+  k.setPose('idle');
+  k.match.p1.x = x1;
+  k.match.p2.x = x2;
+  await new Promise((r) => setTimeout(r, 700));
+  const f = k.framing.probe();
+  k.clearPose();
+  return { ndc: f.ndc, z: f.z, lookX: f.lookX, visibleHalf: f.visibleHalf };
+}, { x1, x2 });
+const portraitHalf = await portraitPage.evaluate(() => window.__kof.framing.probe().arenaHalf);
+const portraitExtreme = await framingCase(-portraitHalf, portraitHalf);
+const portraitLeft = await framingCase(-portraitHalf, -portraitHalf + 0.6);
+const portraitRight = await framingCase(portraitHalf - 0.6, portraitHalf);
+const portraitProjection = await portraitPage.evaluate(() => window.__kof.framing.project(-1, 1));
+check('竖屏极限站位：两人各在一端时真实投影都在画面内',
+  inView(portraitExtreme.ndc) &&
+  portraitProjection.length === 2 && portraitProjection.every((n) => Number.isFinite(n)),
+  `ndc=[${fmt(portraitExtreme.ndc)}], z=${portraitExtreme.z.toFixed(2)}, ` +
+  `lookX=${portraitExtreme.lookX.toFixed(2)}, project=[${fmt(portraitProjection)}]`);
+check('竖屏同侧挤压：两人一起贴左 / 贴右边线也不出画',
+  inView(portraitLeft.ndc) && inView(portraitRight.ndc),
+  `left=[${fmt(portraitLeft.ndc)}] @lookX=${portraitLeft.lookX.toFixed(2)}, ` +
+  `right=[${fmt(portraitRight.ndc)}] @lookX=${portraitRight.lookX.toFixed(2)}`);
+
+const portraitWalk = await portraitPage.evaluate(async () => {
+  const k = window.__kof;
+  const f = k.framing.probe();
+  const input = { dir: -1, jump: false, down: false, guard: false, buttons: [] };
+  for (let i = 0; i < 240; i++) k.match.p1.update(input);
+  const x = k.match.p1.x;
+  // 不能拿上一场景遗留的机位去投影新坐标：等镜头跟随到贴边站位后再读实时 NDC。
+  await new Promise((r) => setTimeout(r, 700));
+  const live = k.framing.probe();
+  return { x, arenaHalf: f.arenaHalf, ndc: live.ndc, lookX: live.lookX };
+});
+check('竖屏活动范围被限制在窗口内：一路后退也停在边界上且仍可见',
+  Math.abs(portraitWalk.x + portraitWalk.arenaHalf) < 1e-6 && inView(portraitWalk.ndc),
+  `p1=${portraitWalk.x.toFixed(3)}, -half=${(-portraitWalk.arenaHalf).toFixed(3)}, ` +
+  `ndc=[${fmt(portraitWalk.ndc)}], lookX=${portraitWalk.lookX.toFixed(2)}`);
+await sleep(600);
+const portraitLive = await portraitPage.evaluate(() => window.__kof.framing.probe());
+check('竖屏贴边对局中两人实时 NDC 仍在画面内（镜头跟随不滞后出画）',
+  inView(portraitLive.ndc),
+  `ndc=[${fmt(portraitLive.ndc)}], z=${portraitLive.z.toFixed(2)}, fov=${portraitLive.fov.toFixed(2)}`);
+const portraitShot = path.join(shots, '12-mobile-portrait.png');
+await portraitPage.screenshot({ path: portraitShot });
+check('竖屏截图已生成', fs.existsSync(portraitShot) && fs.statSync(portraitShot).size > 10000,
+  `${(fs.statSync(portraitShot).size / 1024).toFixed(0)} KB`);
+
+// 旋转回横屏：边界必须恢复，且不能残留竖屏的窄场地状态。
+await portraitPage.setViewport({ width: 844, height: 390, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+await sleep(650);
+const portraitRotate = await portraitPage.evaluate(() => ({
+  innerW: window.innerWidth, innerH: window.innerHeight,
+  framing: window.__kof.framing.probe(),
+  p1: window.__kof.match.p1.x, p2: window.__kof.match.p2.x,
+}));
+check('旋转回横屏：场地恢复 3.35、站位在界内、两人仍入画',
+  portraitRotate.innerW === 844 && !portraitRotate.framing.portrait &&
+  Math.abs(portraitRotate.framing.arenaHalf - 3.35) < 1e-6 &&
+  Math.abs(portraitRotate.p1) <= 3.35 + 1e-6 && Math.abs(portraitRotate.p2) <= 3.35 + 1e-6 &&
+  inView(portraitRotate.framing.ndc),
+  `aspect=${portraitRotate.framing.aspect.toFixed(2)}, half=${portraitRotate.framing.arenaHalf.toFixed(2)}, ` +
+  `p1=${portraitRotate.p1.toFixed(2)}, ndc=[${fmt(portraitRotate.framing.ndc)}]`);
+await portraitPage.close();
+
+check('全程无 pageerror / console.error / 失败请求（含移动端与竖屏视口）',
   pageErrors.length === 0 && consoleErrors.length === 0 && failedRequests.length === 0,
   [...pageErrors, ...consoleErrors, ...failedRequests].join(' | '));
 
@@ -1149,6 +1275,8 @@ const report = {
   superProbe, superImpact,
   touchUi, touchShot, padProbe, padMacro, mobileBoot, mobileProbe, mobileShot,
   shellDesktop, mobileShell, tapPoint, dblTap,
+  portraitBoot, portraitHalf, portraitExtreme, portraitLeft, portraitRight,
+  portraitProjection, portraitWalk, portraitLive, portraitRotate, portraitShot,
   pageErrors, consoleErrors, failedRequests, results,
 };
 fs.writeFileSync(path.join(shots, 'report.json'), JSON.stringify(report, null, 2));

@@ -5,7 +5,8 @@
  * 模块图的一部分；esbuild 是 vite 的既有依赖，用它做一次零配置的 bundle 最稳，
  * 也让单测与生产构建消费的是同一份源码，不会出现「测试里另写一份规则」。
  *
- * 只打包不依赖 DOM/WebGL 的模块：帧表、判定框、状态机、角色、AI、比赛流程、输入缓冲。
+ * 只打包不依赖 DOM/WebGL 的模块：帧表、判定框、状态机、角色、AI、比赛流程、输入缓冲，
+ * 以及纯函数的取景契约 Framing（不 import three，可被 node 直接断言）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -25,6 +26,7 @@ export * as pad from './src/core/pad.ts';
 export * as fighter from './src/fighter/Fighter.ts';
 export * as ai from './src/fighter/AI.ts';
 export * as match from './src/core/match.ts';
+export * as framing from './src/view/Framing.ts';
 `;
 
 await build({
