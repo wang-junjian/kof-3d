@@ -823,7 +823,210 @@ check('超必杀演出截图已生成', fs.existsSync(superShot) && fs.statSync(
   `${(fs.existsSync(superShot) ? fs.statSync(superShot).size / 1024 : 0).toFixed(0)} KB`);
 await page.evaluate(() => window.__kof.clearPose());
 
-check('全程无 pageerror / console.error / 失败请求',
+// ── 触屏虚拟键 / Gamepad：真实 DOM 事件 + 轮询设备模拟 ────────────────────
+// 每个用例前把对局推回干净状态：p2 推远、清硬直、满槽，避免 AI 干扰判定。
+const armInputTest = () => page.evaluate(() => {
+  const m = window.__kof.match;
+  m.phase = 'fight'; m.hitstop = 0; m.buffered.length = 0;
+  const a = m.p1, b = m.p2;
+  a.state = 'idle'; a.move = null; a.moveFrame = 0; a.stateFrame = 0;
+  a.stunLeft = 0; a.landingStun = 0; a.airborne = false; a.y = 0; a.vy = 0; a.vx = 0;
+  a.guarding = false; a.guardLevel = null; a.crouching = false;
+  a.x = -1.5; a.meter = 100;
+  b.x = 3.2; b.state = 'idle'; b.move = null; b.vx = 0; b.stunLeft = 0;
+});
+
+const touchUi = await page.evaluate(() => {
+  const k = window.__kof;
+  k.controls.setTouchVisible(true);
+  const root = document.getElementById('touch-controls');
+  const rects = [...root.querySelectorAll('.tc-key')].map((e) => {
+    const r = e.getBoundingClientRect();
+    return {
+      role: e.dataset.role || e.dataset.macro || '?',
+      x: Math.round(r.x), y: Math.round(r.y),
+      w: Math.round(r.width), h: Math.round(r.height),
+    };
+  });
+  return {
+    roles: [...root.querySelectorAll('[data-role]')].map((e) => e.dataset.role),
+    macros: root.querySelectorAll('[data-macro="qcf"]').length,
+    rects, probe: k.controls.probe(),
+    bodyHasTouch: document.body.classList.contains('touch-ui'),
+    bottomHidden: getComputedStyle(document.querySelector('.hud-bottom')).display === 'none',
+    viewport: { w: innerWidth, h: innerHeight },
+  };
+});
+check('触屏虚拟键就位：四方向 + 四攻击 + 236 快捷键，桌面底栏让位',
+  ['up', 'down', 'left', 'right', 'LP', 'HP', 'LK', 'HK'].every((r) => touchUi.roles.includes(r)) &&
+  touchUi.roles.length === 8 && touchUi.macros === 1 && touchUi.probe.buttons === 8 &&
+  touchUi.probe.visible && touchUi.bodyHasTouch && touchUi.bottomHidden,
+  `roles=${touchUi.roles.join(',')}, macro=${touchUi.macros}, visible=${touchUi.probe.visible}`);
+const stickRight = Math.max(...touchUi.rects
+  .filter((r) => ['up', 'down', 'left', 'right'].includes(r.role)).map((r) => r.x + r.w));
+const actionLeft = Math.min(...touchUi.rects
+  .filter((r) => ['LP', 'HP', 'LK', 'HK', 'qcf'].includes(r.role)).map((r) => r.x));
+check('虚拟键全部在视口内、左右分区不重叠、不遮挡上半屏血条',
+  touchUi.rects.length === 9 &&
+  touchUi.rects.every((r) => r.w >= 40 && r.h >= 40 && r.x >= 0 && r.y >= 0 &&
+    r.x + r.w <= touchUi.viewport.w && r.y + r.h <= touchUi.viewport.h) &&
+  stickRight < actionLeft && Math.min(...touchUi.rects.map((r) => r.y)) > touchUi.viewport.h * 0.5,
+  `keys=${touchUi.rects.length}, 分隔=${stickRight}<${actionLeft}, 最高 y=${Math.min(...touchUi.rects.map((r) => r.y))}`);
+
+const keyPoint = await page.evaluate((role) => {
+  const el = document.querySelector(`#touch-controls [data-role="${role}"]`);
+  const r = el.getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+}, 'right');
+await page.mouse.move(keyPoint.x, keyPoint.y);
+await page.mouse.down();
+const touchHeld = await page.evaluate(() => window.__kof.controls.probe().held);
+await page.mouse.up();
+const touchReleased = await page.evaluate(() => window.__kof.controls.probe().held);
+check('触屏方向键按下 / 抬起经真实 pointer 事件汇入 InputBuffer',
+  touchHeld.includes('right') && !touchReleased.includes('right'),
+  `down=[${touchHeld.join(',')}], up=[${touchReleased.join(',')}]`);
+
+await armInputTest();
+const atkPoint = await page.evaluate(() => {
+  const r = document.querySelector('#touch-controls [data-role="LP"]').getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+});
+// 启动观察器后再按键：LP 只有十几帧，固定 sleep 会碰上逻辑帧 catch-up 把招式跑完，
+// 读到的 move 已经是 null。与 KO 镜头同样用条件等待，避免时间耦合。
+const atkFired = page.waitForFunction(
+  'window.__kof.snapshot().p1.move === "LP"', { timeout: 4000 },
+).then(() => true).catch(() => false);
+await page.mouse.move(atkPoint.x, atkPoint.y);
+await page.mouse.down();
+const atkHeld = await page.evaluate(() => window.__kof.controls.probe().held);
+await page.mouse.up();
+const atkSeen = await atkFired;
+check('触屏攻击键端到端出招（输入层 → 帧表 → 角色状态）',
+  atkHeld.includes('LP') && atkSeen,
+  `held=[${atkHeld.join(',')}], 起招=${atkSeen}`);
+
+await armInputTest();
+const macroPoint = await page.evaluate(() => {
+  const r = document.querySelector('#touch-controls [data-macro="qcf"]').getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+});
+await page.mouse.click(macroPoint.x, macroPoint.y);
+const macroFired = await page.waitForFunction(
+  'window.__kof.snapshot().p1.move === "SUPER"', { timeout: 4000 },
+).then(() => true).catch(() => false);
+const macroSnap = await snap();
+check('触屏一键 236 走同一判定链路：扣 50 POW 并起 SUPER',
+  macroFired && macroSnap.p1.move === 'SUPER' && macroSnap.p1.meter === 50,
+  `move=${macroSnap.p1.move}, meter=${macroSnap.p1.meter}`);
+const touchShot = path.join(shots, '10-touch-ui.png');
+await page.screenshot({ path: touchShot });
+check('触屏 UI 截图已生成', fs.existsSync(touchShot) && fs.statSync(touchShot).size > 10000,
+  `${(fs.statSync(touchShot).size / 1024).toFixed(0)} KB`);
+
+// 手柄是轮询设备，没有 DOM 事件：直接替换 navigator.getGamepads 让 sync() 读到假手柄。
+const padProbe = await page.evaluate(async () => {
+  const k = window.__kof;
+  const wait = () => new Promise((r) => requestAnimationFrame(r));
+  const fake = {
+    connected: true, axes: [0.9, 0.9],
+    buttons: Array.from({ length: 16 }, () => ({ pressed: false })),
+  };
+  fake.buttons[0] = { pressed: true }; // A → LP
+  navigator.getGamepads = () => [fake];
+  for (let i = 0; i < 4; i++) await wait();
+  const connected = {
+    probe: k.controls.probe(),
+    hint: document.getElementById('device-hint').textContent,
+  };
+  fake.axes = [0, 0];
+  fake.buttons[0] = { pressed: false };
+  navigator.getGamepads = () => [];
+  for (let i = 0; i < 4; i++) await wait();
+  const disconnected = {
+    probe: k.controls.probe(),
+    hint: document.getElementById('device-hint').textContent,
+  };
+  return { connected, disconnected };
+});
+check('Gamepad 左摇杆 + 十字键按「或」汇入，连接提示可读',
+  padProbe.connected.probe.padConnected &&
+  ['right', 'down', 'LP'].every((r) => padProbe.connected.probe.padRoles.includes(r)) &&
+  ['right', 'down', 'LP'].every((r) => padProbe.connected.probe.held.includes(r)) &&
+  padProbe.connected.hint.includes('手柄已连接'),
+  `padRoles=[${padProbe.connected.probe.padRoles.join(',')}], held=[${padProbe.connected.probe.held.join(',')}]`);
+check('手柄断开立即收回角色并清空提示（不残留方向）',
+  !padProbe.disconnected.probe.padConnected &&
+  padProbe.disconnected.probe.padRoles.length === 0 &&
+  ['right', 'down', 'LP'].every((r) => !padProbe.disconnected.probe.held.includes(r)) &&
+  padProbe.disconnected.hint === '',
+  `padRoles=[${padProbe.disconnected.probe.padRoles.join(',')}], held=[${padProbe.disconnected.probe.held.join(',')}]`);
+
+await armInputTest();
+const padMacro = await page.evaluate(async () => {
+  const k = window.__kof;
+  const wait = () => new Promise((r) => requestAnimationFrame(r));
+  const fake = {
+    connected: true, axes: [0, 0],
+    buttons: Array.from({ length: 16 }, () => ({ pressed: false })),
+  };
+  navigator.getGamepads = () => [fake];
+  await wait();
+  fake.buttons[5] = { pressed: true }; // RB → 一键 236
+  for (let i = 0; i < 6; i++) await wait(); // 按住不放，验证边缘检测不重复排队
+  const first = { move: k.snapshot().p1.move, meter: k.match.p1.meter };
+  navigator.getGamepads = () => [];
+  for (let i = 0; i < 3; i++) await wait();
+  return { first, final: { move: k.snapshot().p1.move, meter: k.match.p1.meter } };
+});
+check('手柄 RB 一键 236：边缘触发，按住不重复扣槽',
+  padMacro.first.move === 'SUPER' && padMacro.first.meter === 50 &&
+  padMacro.final.meter === 50,
+  `after=${JSON.stringify(padMacro.first)}, final=${JSON.stringify(padMacro.final)}`);
+await page.evaluate(() => window.__kof.controls.setTouchVisible(null));
+
+// 另开一个真实触屏横屏视口：验证设备自动判定，而不是靠自检强制开关。
+const mobilePage = await browser.newPage();
+await mobilePage.setViewport({ width: 844, height: 390, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+mobilePage.on('pageerror', (e) => pageErrors.push(`[mobile] ${e}`));
+mobilePage.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(`[mobile] ${m.text()}`); });
+mobilePage.on('requestfailed', (r) => failedRequests.push(`[mobile] ${r.url()}`));
+await mobilePage.goto(`file://${target}`, { waitUntil: 'load' });
+await mobilePage.waitForFunction('window.__kof && window.__kof.ready === true', { timeout: 25000 });
+await sleep(700);
+const mobileBoot = await mobilePage.evaluate(() => ({
+  display: getComputedStyle(document.getElementById('touch-controls')).display,
+  probe: window.__kof.controls.probe(),
+  hint: document.querySelector('.boot-keys')?.innerText ?? '',
+  kbHidden: [...document.querySelectorAll('.boot-keys .kb-hint')]
+    .every((e) => getComputedStyle(e).display === 'none'),
+}));
+check('触屏开机页只留设备说明、虚拟键在遮罩期间不露面',
+  mobileBoot.display === 'none' && !mobileBoot.probe.visible && mobileBoot.kbHidden &&
+  mobileBoot.hint.includes('触屏') && !mobileBoot.hint.includes('A D 移动'),
+  `display=${mobileBoot.display}, kbHidden=${mobileBoot.kbHidden}, hint=${mobileBoot.hint.slice(0, 28)}`);
+await mobilePage.click('#boot');
+await sleep(600);
+const mobileProbe = await mobilePage.evaluate(() => ({
+  probe: window.__kof.controls.probe(),
+  maxTouchPoints: navigator.maxTouchPoints,
+  coarse: matchMedia('(pointer: coarse)').matches,
+  display: getComputedStyle(document.getElementById('touch-controls')).display,
+  bootHint: document.querySelector('.boot-keys')?.innerText.includes('触屏') ?? false,
+  canvas: { w: document.getElementById('stage').clientWidth, h: document.getElementById('stage').clientHeight },
+}));
+const mobileShot = path.join(shots, '11-mobile-landscape.png');
+await mobilePage.screenshot({ path: mobileShot });
+check('真实触屏横屏视口自动启用虚拟键（设备判定，无需强制）',
+  mobileProbe.probe.touchDetected && mobileProbe.probe.visible &&
+  mobileProbe.display === 'flex' && mobileProbe.bootHint &&
+  mobileProbe.canvas.w > 0 && mobileProbe.canvas.h > 0,
+  `maxTouchPoints=${mobileProbe.maxTouchPoints}, coarse=${mobileProbe.coarse}, canvas=${mobileProbe.canvas.w}x${mobileProbe.canvas.h}`);
+check('移动端横屏截图已生成', fs.existsSync(mobileShot) && fs.statSync(mobileShot).size > 10000,
+  `${(fs.statSync(mobileShot).size / 1024).toFixed(0)} KB`);
+await mobilePage.close();
+
+check('全程无 pageerror / console.error / 失败请求（含移动端视口）',
   pageErrors.length === 0 && consoleErrors.length === 0 && failedRequests.length === 0,
   [...pageErrors, ...consoleErrors, ...failedRequests].join(' | '));
 
@@ -835,6 +1038,7 @@ const report = {
   fistGain, footGain, airFootGain, guardGap,
   impactProbe, recoil, dustBefore, dustAfter, freeze, koShot, koDom, resetShot,
   superProbe, superImpact,
+  touchUi, touchShot, padProbe, padMacro, mobileBoot, mobileProbe, mobileShot,
   pageErrors, consoleErrors, failedRequests, results,
 };
 fs.writeFileSync(path.join(shots, 'report.json'), JSON.stringify(report, null, 2));

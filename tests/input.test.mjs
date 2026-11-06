@@ -121,3 +121,80 @@ test('窗口失焦清空按键状态，dispose 移除所有监听', () => {
   buf.dispose();
   assert.equal(target.handlers.size, 0);
 });
+
+// ── 多输入源汇合：键盘 / 触屏 / 手柄共用 InputBuffer ─────────────────
+test('外部设备 press/release 与键盘同构：边缘触发一次、方向持续按住', () => {
+  const { buf } = make();
+  buf.press('right', 'touch');
+  assert.equal(buf.sample().dir, 1);
+  assert.equal(buf.sample().dir, 1, '方向是持续状态，不重复消费');
+  buf.press('HP', 'touch');
+  assert.deepEqual(buf.sample().buttons, ['HP']);
+  assert.deepEqual(buf.sample().buttons, [], '攻击键只在按下边缘出现一次');
+  buf.release('right', 'touch');
+  buf.release('HP', 'touch');
+  assert.deepEqual(buf.heldRoles(), []);
+});
+
+test('按 source 分桶：松开其中一个设备不会误清另一个按住的同一方向', () => {
+  const { target, buf } = make();
+  target.emit('keydown', 'KeyD');
+  buf.press('right', 'pad');
+  buf.release('right', 'pad'); // 手柄每帧同步都会 release 未按下的角色
+  assert.equal(buf.sample().dir, 1, '键盘仍按着右');
+  assert.deepEqual(buf.sample().buttons, [], '第二个来源按下不重复产生边缘');
+  target.emit('keyup', 'KeyD');
+  assert.equal(buf.sample().dir, 0);
+});
+
+test('同一来源重复 press 不产生重复边缘（键盘 auto-repeat / 手柄每帧同步）', () => {
+  const { buf } = make();
+  buf.press('LP', 'pad');
+  buf.press('LP', 'pad');
+  buf.press('LP', 'pad');
+  assert.deepEqual(buf.sample().buttons, ['LP']);
+  assert.deepEqual(buf.sample().buttons, []);
+});
+
+test('heldRoles 汇总所有来源；releaseAll 清空按键与待播 236', () => {
+  const { buf } = make();
+  buf.press('left', 'touch');
+  buf.press('HK', 'keyboard');
+  buf.queueQcf(1);
+  assert.deepEqual(buf.heldRoles(), ['left', 'HK']);
+  assert.equal(buf.macroPending, true);
+  buf.releaseAll();
+  assert.deepEqual(buf.heldRoles(), []);
+  assert.equal(buf.macroPending, false);
+  assert.equal(buf.sample().dir, 0);
+});
+
+test('触屏一键 236 排 3 帧：前两帧进历史，第三帧能触发 detectQcf', () => {
+  const { buf } = make();
+  buf.queueQcf(1, 'HP');
+  assert.equal(buf.macroPending, true);
+  const a = buf.sample();
+  const b = buf.sample();
+  const c = buf.sample();
+  assert.equal(buf.macroPending, false);
+  assert.deepEqual(
+    [a, b, c].map((f) => ({ dir: f.dir, down: f.down, buttons: f.buttons })),
+    [
+      { dir: 0, down: true, buttons: [] },
+      { dir: 1, down: true, buttons: [] },
+      { dir: 1, down: false, buttons: ['HP'] },
+    ],
+  );
+  assert.equal(input.detectQcf([a, b], c), 1);
+});
+
+test('镜像站位一键 236 产出绝对左向，且不吞掉真实按键', () => {
+  const { buf } = make();
+  buf.queueQcf(-1, 'LK');
+  const history = [buf.sample(), buf.sample()];
+  const last = buf.sample();
+  assert.equal(last.buttons[0], 'LK');
+  assert.equal(input.detectQcf(history, last), -1);
+  buf.press('down', 'touch');
+  assert.equal(buf.sample().down, true, '宏播完后恢复正常采样');
+});

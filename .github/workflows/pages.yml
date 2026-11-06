@@ -1,0 +1,53 @@
+name: Deploy playable demo
+
+# 仓库只提交源码：可玩的 kof-3d.html 是构建产物（.gitignore 忽略），
+# 由本工作流在每次 push 到 main 时重新构建并发布成 Pages 的 index.html。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时刻只允许一个部署在跑，且不取消进行中的部署（避免站点短暂空档）。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Assemble offline single-file site
+        run: |
+          mkdir -p site
+          cp kof-3d.html site/index.html
+          cp kof-3d.html site/kof-3d.html
+          touch site/.nojekyll
+          printf 'Playable build of commit %s\n' "$GITHUB_SHA" > site/build.txt
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

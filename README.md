@@ -2,13 +2,15 @@
 
 原创角色的 1v1 单机 3D 格斗网页切片（Three.js + Vite + TypeScript）。致敬式借鉴格斗游戏规则，不使用 SNK 角色与「拳皇」名称；角色为原创成年女性格斗家，时尚竞技路线。
 
+> **在线试玩 / Play online**：<https://wang-junjian.github.io/kof-3d/> — 打开即玩、零安装；手机横屏自动出现虚拟键，标准手柄即插即用。试玩页同时提供 `kof-3d.html` 供下载后离线双击打开。
+>
 > **开源仓库**：<https://github.com/wang-junjian/kof-3d> · **MIT License**（见 [LICENSE](LICENSE)）· 第三方素材出处见 [CREDITS.md](CREDITS.md)。
 >
 > **商标声明 / Trademark**：`kof-3d` 只是本项目沿用的历史代号，与 SNK CORPORATION 及 "THE KING OF FIGHTERS" 系列没有任何关联、授权或背书；仓库不含任何 SNK 角色、美术或商标素材。
 
-**范围**：M0 + M1 + **M2 最小闭环**（可打完一局，并围绕 POW 槽形成「攒气 → 236 → 消费 → 演出」的玩法目标）。已落地：站/蹲防与 GUARD BREAK、跳跃攻击、Hitstop、三回合流程、三档 AI、**轻拳接触后取消接重拳/重踢**的连段取消，以及 **236 指令超必杀「流星直拳」**（消耗 50 POW，配专属姿态、打击演出与 HUD 反馈）。**未解禁**：选人界面（RIN 与 FEI 两名角色已内置但不可选，AI 不放必杀）、移动端可玩，M3 的美术打磨 / 联机。POW 槽随攻击、格挡、受击累积，封顶 100、每回合清零，目前唯一的消费点是超必杀。
+**范围**：M0 + M1 + **M2 最小闭环**（可打完一局，并围绕 POW 槽形成「攒气 → 236 → 消费 → 演出」的玩法目标）。已落地：站/蹲防与 GUARD BREAK、跳跃攻击、Hitstop、三回合流程、三档 AI、**轻拳接触后取消接重拳/重踢**的连段取消、**236 指令超必杀「流星直拳」**（消耗 50 POW，配专属姿态、打击演出与 HUD 反馈），以及**触屏虚拟方向键 + 四攻击键 + 236 快捷键、标准 Gamepad 支持**。**未解禁**：选人界面（RIN 与 FEI 两名角色已内置但不可选，AI 不放必杀）、M3 的美术打磨 / 联机。POW 槽随攻击、格挡、受击累积，封顶 100、每回合清零，目前唯一的消费点是超必杀。
 
-**English**: An original single-player 1v1 3D fighting vertical slice built with Three.js + Vite + TypeScript. No SNK characters or assets are used; the fighters are original adult characters in a competitive-sports style. Scope covers M0 + M1 plus a minimal M2 loop: a 236 motion-input super ("Meteor Straight") that spends 50 POW, with its own pose, hit FX and HUD feedback. Also implemented are a light-punch cancel into heavy punch / heavy kick, stand / crouch guard levels with guard breaks, jump attacks, hitstop, and a three-round match flow with three AI difficulties. Out of scope: a character-select screen (RIN / FEI both ship built-in but are not selectable, and the AI never uses supers), mobile controls, art polish and online play. The POW meter accumulates, caps at 100, resets each round, and has exactly one spend path. MIT-licensed; see `LICENSE` and `CREDITS.md`.
+**English**: An original single-player 1v1 3D fighting vertical slice built with Three.js + Vite + TypeScript. No SNK characters or assets are used; the fighters are original adult characters in a competitive-sports style. Scope covers M0 + M1 plus a minimal M2 loop: a 236 motion-input super ("Meteor Straight") that spends 50 POW, with its own pose, hit FX and HUD feedback. Also implemented are a light-punch cancel into heavy punch / heavy kick, stand / crouch guard levels with guard breaks, jump attacks, hitstop, and a three-round match flow with three AI difficulties. Mobile play works through on-screen virtual keys with a one-tap 236 macro, and standard gamepads work out of the box; a playable build is published to GitHub Pages. Out of scope: a character-select screen (RIN / FEI both ship built-in but are not selectable, and the AI never uses supers), art polish and online multiplayer. The POW meter accumulates, caps at 100, resets each round, and has exactly one spend path. MIT-licensed; see `LICENSE` and `CREDITS.md`.
 
 ---
 
@@ -17,17 +19,23 @@
 ```bash
 npm install
 npm run typecheck   # tsc --noEmit
-npm test            # 54 条纯逻辑单测（node --test，不需要浏览器）
+npm test            # 67 条纯逻辑单测（node --test，不需要浏览器）
 npm run build       # → kof-3d.html / kof-3d-vrm.html
 npm run verify      # 浏览器端到端自检 + 截图 + shots/report.json
 npm run dev         # 开发模式（Vite，127.0.0.1）
 ```
 
 - `npm run build` 产出的 **`kof-3d.html` 是可离线双击打开的单文件**（`file://` 下零外部请求、无 CDN）。`kof-3d-vrm.html` 是内联 `assets/character.vrm` 的可替换资产槽演示版。
-- 本仓库**只提交源码**：两份单文件 HTML 与 `shots/` 截图都在 `.gitignore` 中，clone 后跑 `npm install && npm run build` 即可得到可玩文件。
-- `npm run verify` 需要本机 Chrome / Chromium。默认按常见路径自动探测；找不到时设 `CHROME_PATH=/path/to/chrome npm run verify`。拼图与近景图由浏览器 Canvas / `deviceScaleFactor` 生成，**不依赖 ImageMagick**。
+- 本仓库**只提交源码**：两份单文件 HTML 与 `shots/` 截图都在 `.gitignore` 中，clone 后跑 `npm install && npm run build` 即可得到可玩文件。线上试玩页由 `.github/workflows/pages.yml` 在 push 到 `main` 时自动构建并发布，产物同样不进仓库。
+- `npm run verify` 需要本机 Chrome / Chromium。默认按常见路径自动探测；找不到时设 `CHROME_PATH=/path/to/chrome npm run verify`。拼图与近景图由浏览器 Canvas / `deviceScaleFactor` 生成，**不依赖 ImageMagick**。当前共 **97 条**浏览器断言。
 - 环境：Node 22+。`puppeteer-core` 与 `esbuild` 都已声明在 devDependencies，换机器 `npm install` 即可跑全套自检。
-- 验收顺序固定：`npm test` → `npm run build` → `npm run verify` 连跑两次全绿 → **人工看图**。数值全绿不等于视觉成立，历次靠 `shots/08-detail.png`、`06-poses.png`、`07-impact.png`、`09-super.png` 发现过姿态、裁切、特效质感与文字可读性问题。
+- 验收顺序固定：`npm test` → `npm run build` → `npm run verify` 连跑两次全绿 → **人工看图**。数值全绿不等于视觉成立，历次靠 `shots/08-detail.png`、`06-poses.png`、`07-impact.png`、`09-super.png`、`10-touch-ui.png`、`11-mobile-landscape.png` 发现过姿态、裁切、特效质感、文字可读性与触屏布局问题。
+
+### 在线试玩 / Play online
+
+<https://wang-junjian.github.io/kof-3d/>
+
+`index.html` 就是构建出的 `kof-3d.html`，同目录另有 `kof-3d.html` 可直接下载离线游玩。部署走官方 `actions/deploy-pages`：push 到 `main` 触发 `npm ci → npm test → typecheck → build → upload-pages-artifact → deploy`，也可在 Actions 里手动 `workflow_dispatch` 重跑。CI 不跑 `npm run verify`（需要本机 Chrome），浏览器自检在本地验收时完成。仓库**不提交任何构建产物**，Pages 的内容完全由 Actions 从源码重建。
 
 ---
 
@@ -51,6 +59,10 @@ npm run dev         # 开发模式（Vite，127.0.0.1）
 
 236 指令在 **20 逻辑帧（约 333ms）**窗口内识别：先按住 `S`（↓），再保持 `S` 加朝对手方向（↘），最后松开 `S`、保持该方向并按下任一攻击键（→ + 键）。输入模型只有 `dir: -1|0|1` 与 `down`、没有独立斜下方向，所以 ↘ 用「`down` + `dir`」组合表达；识别结果是**绝对**方向，`Fighter` 比对 `facing` 后才放行——站到对手右侧需要反摇 ↓↙←。POW 不足 50、背向摇杆、人在空中或窗口过期，都会回退成该键对应的普通招式，且一分 POW 不扣。指令目前只对玩家侧识别，AI 不放必杀。
 
+**触屏 / Touch**：触屏设备（或 `pointer: coarse`）自动在左下显示十字方向键、右下显示「轻拳 / 重拳 / 轻踢 / 重踢」四键与绿色「236 必杀」键；建议横屏。一键 236 会把 ↓ → ↘ → →+攻击 排成 3 个逻辑帧喂给 `InputBuffer`，**走的是与键盘手摇完全相同的 `detectQcf()` 判定链路**，不是另一套规则。开机遮罩期间虚拟键不显示，触屏开机页也只显示设备对应的一行说明。
+
+**手柄 / Gamepad**：标准手柄左摇杆 / 十字键控制方向，`A` `B` `X` `Y` 对应轻拳 / 重拳 / 轻踢 / 重踢，`RB` 一键 236（边缘触发，按住不重复排队）。连接 / 断开会在底部提示。摇杆死区 `0.35`，斜下能同时给出 `down` + 方向，因此也可以手动摇 236。键盘、触屏、手柄按「或」合并、按来源分桶持有，松开其中一个不会误清另一个。
+
 ---
 
 ## 工程约定 / Hard constraints
@@ -62,18 +74,21 @@ npm run dev         # 开发模式（Vite，127.0.0.1）
 5. **判定层自研**：状态机 + AABB（hitbox / hurtbox / pushbox），不上物理引擎。判定框局部坐标随 `facing` 镜像，命中只在 active 窗口结算，每个招式 `hitId` 保证一次结算。
 6. **改动收口**：纯逻辑规则改 `src/core/**` / `src/fighter/**` 时同步更新 `tests/*.test.mjs`；渲染 / 演出改动同步更新 `scripts/verify.mjs`。两层断言必须同时全绿。
 7. **236 数值与方向判定单一来源**。`QCF_WINDOW = 20`（`core/input.ts`）与 `SUPER_COST = 50`（`core/frames.ts`）是唯一数值来源，经 `window.__kof.config` 暴露给 `verify.mjs`，自检脚本不得硬编码第二份。`detectQcf()` 只产出**绝对**方向，`facing` 比对只在 `Fighter.tryStartMove()` 里做；改站位镜像时不要把角色状态掺进输入层。
+8. **输入设备归约单一入口**。键盘 / 触屏 / Gamepad 统一归约成 8 个 `InputRole`，经 `InputBuffer.press()/release(role, source)` 按来源分桶持有；纯逻辑层（`frames` / `Match` / `Fighter`）只认 `InputFrame`，不认识任何设备。新增设备不得在 `Fighter` 里加分支；`Controls.sync()` 必须在 `input.sample()` 之前调用，手柄轮询才不会慢一帧。
+9. **仓库只提交源码**。`kof-3d*.html`、`dist/`、`shots/`、`tests/.build/` 均不入库；线上页面由 `.github/workflows/pages.yml` 从源码重建，禁止手工往仓库提交构建产物或往 Pages 分支塞 HTML。
 
 ---
 
 ## 目录结构 / Layout
 
 ```
-src/core/       loop / input / state / frames / hitbox / match   （纯逻辑，单测直接覆盖）
+src/core/       loop / input / pad / state / frames / hitbox / match   （纯逻辑，单测直接覆盖）
 src/fighter/    Fighter / AI / Animator / rig / RigView / VrmView / CharacterView
-src/view/       Stage / Camera / Fx / Hud / Audio / Debug
+src/view/       Stage / Camera / Fx / Hud / Audio / Debug / Controls（触控 + 手柄 UI）
 scripts/        inline.mjs（单文件内联） / bundle-logic.mjs（单测打包） / verify.mjs（浏览器自检）
 tests/          *.test.mjs（node --test 纯逻辑断言）
 assets/         character.vrm（CC0 的 VRM 插槽输入，见 CREDITS.md）
+.github/        workflows/pages.yml（构建并发布在线试玩页）
 LICENSE         MIT License
 CREDITS.md      第三方素材与依赖许可说明
 ```
@@ -91,6 +106,8 @@ CREDITS.md      第三方素材与依赖许可说明
 | `snapshot()` | 全部运行时状态：血量 / 阶段 / 镜头 / FX 计数 / 骨架指纹 / `anim` / `fps` 与 `renderFps` |
 | `match`、`moves` | 直接访问比赛状态机与帧表（含 `SUPER`；自检用） |
 | `config` | M2 数值单一来源：`superCost`（50）/ `qcfWindow`（20 帧） |
+| `controls.probe()` | 触控 / 手柄汇合状态：可见性、设备判定、手柄角色、宏排队、按住的 `InputRole` |
+| `controls.setTouchVisible(on)` | 桌面调试用：强制显示 / 隐藏虚拟键，传 `null` 回到设备自动判定 |
 | `setPose(state, moveId?, frame?, opts?)` | 冻结逻辑并摆出指定动作帧；`opts` 支持 `guardLevel / airborne / y` |
 | `clearPose()` | 解冻并复位两人 |
 | `showImpact(heavy?)` | 摆出命中帧并触发全部打击演出，用于 `07-impact.png` |
@@ -106,7 +123,7 @@ CREDITS.md      第三方素材与依赖许可说明
 
 - 程序化角色仍是 5 头身 Q 版手办；几何精修抬高的是下限，颜值上限需要真实 VRM 资产。
 - VRM 插槽演示版不生成攻击残影（`SkinnedMesh` 克隆会共享实时骨架，剪影无法定格在发力帧）。
-- 移动端目前只能看、不能玩；虚拟方向键 + 四攻击键 + Gamepad 排在后续路线图。
+- 触屏布局按横屏设计；竖屏只给提示，按键紧凑且没有自定义键位 / 透明度设置。手柄映射写死为标准布局，无重绑定、无振动反馈。
 - POW 槽只有一个消费点：236 超必杀扣 50（半槽，攒满可连放两次），必杀本身 `meterGain = 0` 不再攒气。攻击者按帧表 `meterGain` 攒气（被防住也攒），防守方格挡 +3 / 受击 +2，KO 分支不攒气；封顶 `MAX_METER = 100`，`resetForRound()` 每回合清零、胜场保留。暂无多级超必杀 / MAX 模式。
 - 236 指令目前只接玩家侧，AI 不会放必杀；也没有选人界面与指令变体（214 / 623），普通招式不能取消进必杀。
 - `fps` 统计逻辑步/秒，`renderFps` 统计真实渲染帧/秒，掉帧时看后者。
@@ -126,4 +143,4 @@ CREDITS.md      第三方素材与依赖许可说明
 
 ## English summary
 
-A deterministic 60 Hz logic step drives a Three.js render loop with interpolation. Fighters are a hand-written state machine with AABB hit/hurt/push boxes and frame-data driven moves (startup / active / recovery, mid / low / overhead guard levels, jump attacks, hitstop, pushback, three-round match flow), a light-punch cancel window into heavy attacks, and a 236 motion-input super that spends 50 POW with its own pose, burst FX and HUD feedback. The POW meter accumulates per frame table, caps at 100 and resets each round; the super is its only spend path. The procedural character is pure 3D geometry (no textures, no external assets) and shares its `Pose` contract with an optional VRM slot. `npm test` covers the pure logic layer offline; `npm run verify` drives a real headless Chrome for rendering, screenshots and the offline/zero-request contract. Never change joint hierarchy, bone lengths or end-point local coordinates — the skeleton signature in `verify.mjs` will fail immediately.
+A deterministic 60 Hz logic step drives a Three.js render loop with interpolation. Fighters are a hand-written state machine with AABB hit/hurt/push boxes and frame-data driven moves (startup / active / recovery, mid / low / overhead guard levels, jump attacks, hitstop, pushback, three-round match flow), a light-punch cancel window into heavy attacks, and a 236 motion-input super that spends 50 POW with its own pose, burst FX and HUD feedback. The POW meter accumulates per frame table, caps at 100 and resets each round; the super is its only spend path. Keyboard, touch and gamepad inputs are all reduced to eight `InputRole`s in `InputBuffer`, so the logic layer stays device-agnostic; the touch macro and the gamepad RB button replay the same three logical frames that a hand-rolled 236 produces. The procedural character is pure 3D geometry (no textures, no external assets) and shares its `Pose` contract with an optional VRM slot. `npm test` covers the pure logic layer offline; `npm run verify` drives a real headless Chrome for rendering, screenshots, a simulated gamepad, a touch viewport and the offline/zero-request contract. The playable single-file build is published to GitHub Pages by an Actions workflow, with no build artifacts committed to the repository. Never change joint hierarchy, bone lengths or end-point local coordinates — the skeleton signature in `verify.mjs` will fail immediately.

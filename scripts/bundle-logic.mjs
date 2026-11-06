@@ -21,6 +21,7 @@ export * as frames from './src/core/frames.ts';
 export * as hitbox from './src/core/hitbox.ts';
 export * as state from './src/core/state.ts';
 export * as input from './src/core/input.ts';
+export * as pad from './src/core/pad.ts';
 export * as fighter from './src/fighter/Fighter.ts';
 export * as ai from './src/fighter/AI.ts';
 export * as match from './src/core/match.ts';

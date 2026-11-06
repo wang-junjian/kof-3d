@@ -47,7 +47,16 @@ export function detectQcf(history: readonly InputFrame[], frame: InputFrame): 1 
   return null;
 }
 
-const KEY_ROLE: Record<string, string> = {
+/** 所有输入设备最终都归约成这 8 个角色，纯逻辑层不认识键盘 / 触屏 / 手柄。 */
+export type InputRole = 'left' | 'right' | 'up' | 'down' | 'LP' | 'HP' | 'LK' | 'HK';
+/** 分来源持有角色：多设备同时按同一个方向时，松开其中一个不会误清另一个。 */
+export type InputSource = 'keyboard' | 'touch' | 'pad';
+
+export const INPUT_ROLES: readonly InputRole[] = [
+  'left', 'right', 'up', 'down', 'LP', 'HP', 'LK', 'HK',
+];
+
+const KEY_ROLE: Record<string, InputRole> = {
   KeyA: 'left', ArrowLeft: 'left',
   KeyD: 'right', ArrowRight: 'right',
   KeyW: 'up', ArrowUp: 'up',
@@ -55,13 +64,20 @@ const KEY_ROLE: Record<string, string> = {
   KeyJ: 'LP', KeyK: 'HP', KeyL: 'LK', KeyI: 'HK',
 };
 
-const BUTTON_ROLES = new Set(['LP', 'HP', 'LK', 'HK']);
+const BUTTON_ROLES = new Set<InputRole>(['LP', 'HP', 'LK', 'HK']);
 
-/** 12 帧环形缓冲：sample() 每个逻辑帧调用一次，边缘触发的按键只消费一次。 */
+/**
+ * 12 帧环形缓冲：sample() 每个逻辑帧调用一次，边缘触发的按键只消费一次。
+ *
+ * 键盘、触屏虚拟键、Gamepad 都通过 press()/release() 汇入同一个缓冲；
+ * 按 source 分桶保存按住状态，避免「手柄每帧同步」把键盘按住的方向误释放。
+ */
 export class InputBuffer {
-  private held = new Set<string>();
-  private fresh: string[] = [];
+  private readonly held = new Map<InputSource, Set<InputRole>>();
+  private fresh: InputRole[] = [];
   private history: InputFrame[] = [];
+  /** 移动端 236 快捷键排队的脚本帧，由 sample() 逐帧吐出，保持纯逻辑可复现。 */
+  private macro: InputFrame[] = [];
   private started = false;
   onFirstInteraction: (() => void) | null = null;
 
@@ -80,40 +96,89 @@ export class InputBuffer {
     }
   }
 
-  private onDown = (e: KeyboardEvent): void => {
-    if (!(e.code in KEY_ROLE)) return;
-    e.preventDefault();
-    this.signal();
-    if (!this.held.has(e.code)) {
-      this.held.add(e.code);
-      this.fresh.push(e.code);
-    }
-  };
-
-  private onUp = (e: KeyboardEvent): void => {
-    if (!(e.code in KEY_ROLE)) return;
-    e.preventDefault();
-    this.held.delete(e.code);
-  };
-
-  private onBlur = (): void => {
-    this.held.clear();
-    this.fresh.length = 0;
-  };
-
-  private roleHeld(role: string): boolean {
-    for (const code of this.held) if (KEY_ROLE[code] === role) return true;
+  private roleHeld(role: InputRole): boolean {
+    for (const set of this.held.values()) if (set.has(role)) return true;
     return false;
   }
 
+  /** 外部输入源调用：按下边缘只在「该角色从无到有」时进入 fresh。 */
+  press(role: InputRole, source: InputSource = 'keyboard'): void {
+    this.signal();
+    const wasHeld = this.roleHeld(role);
+    let set = this.held.get(source);
+    if (!set) {
+      set = new Set();
+      this.held.set(source, set);
+    }
+    if (set.has(role)) return; // 同一来源的重复按下（键盘 auto-repeat）不重复触发
+    set.add(role);
+    if (!wasHeld) this.fresh.push(role);
+  }
+
+  release(role: InputRole, source: InputSource = 'keyboard'): void {
+    this.held.get(source)?.delete(role);
+  }
+
+  /** 失焦 / 页面隐藏：清空所有来源，避免切回来后角色一直朝一个方向走。 */
+  releaseAll(): void {
+    this.held.clear();
+    this.fresh.length = 0;
+    this.macro.length = 0;
+  }
+
+  /**
+   * 触屏 / 手柄的一键 236：把 ↓ → ↘ → →+攻击 排成 3 个逻辑帧。
+   * Match 会把前两帧存入 20 帧输入历史，第三帧触发 detectQcf，
+   * 因此与键盘手摇走的是**完全相同**的判定链路，不是另一套规则。
+   */
+  queueQcf(dir: 1 | -1, button: ButtonId = 'HP'): void {
+    this.signal();
+    this.fresh.length = 0;
+    this.macro = [
+      { dir: 0, jump: false, down: true, guard: false, buttons: [] },
+      { dir, jump: false, down: true, guard: false, buttons: [] },
+      { dir, jump: false, down: false, guard: false, buttons: [button] },
+    ];
+  }
+
+  get macroPending(): boolean { return this.macro.length > 0; }
+
+  /** 自检探针：当前所有来源合并后的按住角色。 */
+  heldRoles(): InputRole[] {
+    return INPUT_ROLES.filter((r) => this.roleHeld(r));
+  }
+
+  private onDown = (e: KeyboardEvent): void => {
+    const role = KEY_ROLE[e.code];
+    if (!role) return;
+    e.preventDefault();
+    this.press(role, 'keyboard');
+  };
+
+  private onUp = (e: KeyboardEvent): void => {
+    const role = KEY_ROLE[e.code];
+    if (!role) return;
+    e.preventDefault();
+    this.release(role, 'keyboard');
+  };
+
+  private onBlur = (): void => {
+    this.releaseAll();
+  };
+
   sample(): InputFrame {
+    if (this.macro.length) {
+      this.fresh.length = 0;
+      const frame = this.macro.shift() as InputFrame;
+      this.history.push(frame);
+      if (this.history.length > 12) this.history.shift();
+      return frame;
+    }
     const fresh = this.fresh;
     this.fresh = [];
     const buttons: ButtonId[] = [];
     let jump = false;
-    for (const code of fresh) {
-      const role = KEY_ROLE[code];
-      if (!role) continue;
+    for (const role of fresh) {
       if (BUTTON_ROLES.has(role)) buttons.push(role as ButtonId);
       if (role === 'up') jump = true;
     }

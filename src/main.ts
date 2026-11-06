@@ -17,6 +17,7 @@ import { Fx, type FxProbe } from './view/Fx';
 import { DebugBoxes } from './view/Debug';
 import { Hud } from './view/Hud';
 import { Sfx } from './view/Audio';
+import { Controls, type ControlsProbe } from './view/Controls';
 
 interface FighterSnap {
   hp: number; meter: number; state: string; move: string | null;
@@ -95,6 +96,11 @@ interface KofApi {
   /** 调试钩子：实时覆盖关节角，用于标定动作；不参与正常渲染。 */
   setJoint: (joint: JointName, angles: [number, number, number]) => void;
   clearJoints: () => void;
+  /** 输入设备探针：触屏虚拟键与 Gamepad 的汇合状态，供浏览器自检使用。 */
+  controls: {
+    probe: () => ControlsProbe;
+    setTouchVisible: (on: boolean | null) => void;
+  };
 }
 
 declare global {
@@ -226,6 +232,12 @@ input.onFirstInteraction = () => {
   boot.classList.add('gone');
 };
 
+// 触屏虚拟键 + Gamepad 与键盘共用 InputBuffer；236 只在可推进对局的阶段排队。
+const controls = new Controls(document.body, input, {
+  facing: () => (match.p1.facing >= 0 ? 1 : -1),
+  canMacro: () => match.phase === 'fight' && match.hitstop === 0,
+});
+
 let time = 0;
 const prevLanding = [0, 0];
 const prevStrike = [false, false];
@@ -239,6 +251,7 @@ const loop = new FixedLoop(
     // Hitstop 冻结了逻辑，视觉时间也必须一起冻结：否则角色呼吸与姿态平滑
     // 会在「定格」画面里继续动，顿帧感被削弱。逻辑步进与帧表完全不受影响。
     // 用 step() 返回的冻结标志判定，而不是调用前读 hitstop（step 内部会递减它）。
+    controls.sync(); // Gamepad 是轮询设备，必须在 sample() 之前把本帧状态汇入
     const frozen = match.step(input.sample());
     maxHitstop = Math.max(maxHitstop, match.hitstop);
     if (!frozen) time++;
@@ -420,6 +433,10 @@ window.__kof = {
       footL: v.worldPoint('kneeL', [0, -0.43, 0.052]),
       footR: v.worldPoint('kneeR', [0, -0.43, 0.052]),
     };
+  },
+  controls: {
+    probe: () => controls.probe(),
+    setTouchVisible: (on) => controls.setTouchVisible(on),
   },
   setJoint: (joint, angles) => {
     const v = views[0];
