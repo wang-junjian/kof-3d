@@ -609,12 +609,24 @@ for (let i = 0; i < 5; i++) {
 check('待机姿态连续无跳变', Math.max(...idleDeltas) < 0.06,
   `maxDelta=${Math.max(...idleDeltas).toFixed(4)}`);
 
+// 旧写法用固定 sleep(90) + maxDelta<0.5 的绝对阈值：Animator 的插值系数
+// k = 1 - exp(-dt/tau) 随渲染帧率变化，无 GPU 的 CI runner 上 dt 更大（blend≈0.81），
+// 单帧姿态差天然到 0.697，会被误判成「瞬间跳变」。改成与帧率无关的判据：
+// ① 切换后首帧仍有插值（blend<1）；② 首帧关节角与收敛后的稳态不同 → 不是一帧到目标；
+// ③ 用条件等待收敛，而不是再赌一个固定毫秒数。
 await page.evaluate(() => window.__kof.setPose('guard', null, 0));
-await sleep(90);
-const guardEarly = (await snap()).anim[0];
+const guardEarly = await page.evaluate(async () => {
+  await new Promise((r) => requestAnimationFrame(r));
+  const a = window.__kof.snapshot().anim[0];
+  return { blend: a.blend, joints: [...a.joints], maxDelta: a.maxDelta };
+});
+await page.waitForFunction(() => window.__kof.snapshot().anim[0].maxDelta < 0.06, { timeout: 6000 });
+const guardSettled = (await snap()).anim[0];
+const guardShift = Math.max(...guardEarly.joints.map((v, i) => Math.abs(v - guardSettled.joints[i])));
 check('状态切换走姿态平滑而非瞬间跳变',
-  guardEarly.blend < 1 && guardEarly.maxDelta < 0.5,
-  `blend=${guardEarly.blend.toFixed(2)}, maxDelta=${guardEarly.maxDelta.toFixed(3)}`);
+  guardEarly.blend < 1 && guardShift > 0.01 && guardSettled.maxDelta < 0.06,
+  `blend=${guardEarly.blend.toFixed(2)}, 首帧→稳态最大关节差=${guardShift.toFixed(3)}, ` +
+  `首帧Δ=${guardEarly.maxDelta.toFixed(3)}, 稳态Δ=${guardSettled.maxDelta.toFixed(4)}`);
 
 // 站防/蹲防不能只换标签不换姿态：比较真实渲染出的关节角
 await page.evaluate(() => window.__kof.setPose('guard', null, 0, { guardLevel: 'stand' }));
