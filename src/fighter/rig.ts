@@ -21,7 +21,11 @@ export interface CharacterPalette {
   lip: number;
 }
 
-/** 两位原创成年女性格斗家：圆润讨喜的 5 头身比例，时尚竞技造型，仅以配色与发色区分。 */
+/**
+ * 两位原创成年女性格斗家：圆润讨喜的 5 头身比例、时尚竞技造型。
+ * 配色之外还靠刘海片数、侧发长度、马尾蓬松度与护肩轮廓做剪影区分，
+ * 远看不再像同一个角色换色。
+ */
 export const RIN: CharacterPalette = {
   skin: 0xffd9c2, skinShade: 0xe8ae95, hair: 0x33243f, hairHi: 0x8757a6,
   top: 0xe0457e, topDark: 0x93204f, bottoms: 0x364064,
@@ -163,7 +167,9 @@ const ring = (r: number, tube: number, arc = Math.PI * 2): THREE.TorusGeometry =
  * 纯 3D 程序化角色：关节层级 + 多段几何 + 结构分件 + NPR 卡通材质 + 细描边。
  * 零贴图、零外部资源。关节局部坐标与末端位置是动作系统的契约，不得改动。
  */
-export function createRig(p: CharacterPalette): Rig {
+export type RigVariant = 'RIN' | 'FEI';
+
+export function createRig(p: CharacterPalette, variant: RigVariant = 'RIN'): Rig {
   const root = new THREE.Group();
   const joints = {} as Record<JointName, THREE.Group>;
   const materials: THREE.MeshToonMaterial[] = [];
@@ -246,12 +252,13 @@ export function createRig(p: CharacterPalette): Rig {
   const torso = joint(pelvis, 'torso', [0, 0.12, 0]);
   // 腰腹不加描边壳：这层 BackSide 壳会从上衣下摆的收口处穿出来，
   // 在腹前形成一道黑色半圆。衣料与肤色的色差已足够勾出轮廓。
-  add(torso, lathe([[0.106, 0.00], [0.101, 0.07], [0.106, 0.15], [0.118, 0.23], [0.130, 0.29]]),
+  // 腰线再收一点：胸围不变，只压腰腹两侧，Q 版筒状躯干才有起伏
+  add(torso, lathe([[0.100, 0.00], [0.094, 0.07], [0.102, 0.15], [0.118, 0.23], [0.130, 0.29]]),
     p.skin, [0, 0, 0], { scale: [1, 1, 0.78], skin: true });
   // 上衣下摆保持平缓且不加描边壳：收成半径 0 的尖底会让腰腹戳出衣料，
   // 平口的背面在色差与绿色腰带遮挡下不可见。
   add(torso, lathe([
-    [0.128, 0.174], [0.136, 0.210], [0.158, 0.290], [0.186, 0.370],
+    [0.122, 0.174], [0.132, 0.210], [0.158, 0.290], [0.186, 0.370],
     [0.203, 0.440], [0.199, 0.490], [0.192, 0.520],
   ]), p.top, [0, 0, 0], { scale: [1, 1, 0.80] });
   add(torso, lathe([[0.129, 0.170], [0.142, 0.192], [0.144, 0.205]]),
@@ -261,6 +268,10 @@ export function createRig(p: CharacterPalette): Rig {
   for (let i = 0; i < 2; i++) {
     add(torso, sphere(0.007, 8, 6), p.topDark, [-0.011, 0.270 + i * 0.120, 0.163]);
   }
+  // 胸前一道柔和衣料高光：无光照细斜条，方向按角色左右错开，剪影细节更耐看
+  const clothHi = decal(torso, stroke(0.17, 0.006), 0xffffff,
+    [variant === 'FEI' ? 0.070 : -0.070, 0.365, 0.164], undefined, 0.22);
+  clothHi.rotation.z = variant === 'FEI' ? -0.42 : 0.42;
 
   const chest = joint(torso, 'chest', [0, 0.46, 0]);
   for (const s of [-1, 1]) {
@@ -269,6 +280,9 @@ export function createRig(p: CharacterPalette): Rig {
     const dart = decal(chest, stroke(0.040, 0.006), p.topDark, [s * 0.150, -0.012, 0.114]);
     dart.rotation.z = s * 0.30;
   }
+  // 颈根过渡：脖子直接插进胸口会像一根柱子，先垫一圈肤色收口
+  add(chest, lathe([[0.052, -0.010], [0.058, 0.010], [0.050, 0.030]]),
+    p.skin, [0, 0.090, 0], { scale: [1, 1, 0.9], skin: true });
   add(chest, sphere(0.050, 16, 12), p.skin, [0, 0.112, 0], { scale: [1, 1, 0.9], skin: true });
 
   // ── 头部：全几何五官，正面朝向 +Z ─────────────────────────────────────
@@ -282,12 +296,16 @@ export function createRig(p: CharacterPalette): Rig {
   // 发帽只盖头顶：下缘必须高于眼睛，否则整张脸会被吞掉
   add(head, cached('cap', () => new THREE.SphereGeometry(0.139, 26, 16, 0, Math.PI * 2, 0, Math.PI * 0.42)),
     p.hair, [0, 0.072, -0.006], { scale: [1.05, 1.02, 1.04], outline: 1.04 });
-  // 斜刘海：六片贴额的弯曲发束，同色不挑染，避免形成锯齿色块或「皇冠」
-  for (let i = 0; i < 6; i++) {
-    const k = i - 2.5;
-    const h = 0.110 + (2.5 - Math.abs(k)) * 0.014;
-    const bang = add(head, hairStrand(h, 0.036, 0.016), p.hair,
-      [k * 0.037 - 0.008, 0.134 - i * 0.004, 0.102],
+  // 斜刘海按角色分片：RIN 六片碎刘海，FEI 四片更宽的斜刘海。
+  // 只改网格数量与宽度，不动 hair 关节链（骨架指纹与动作探针都依赖它）。
+  const bangCount = variant === 'FEI' ? 4 : 6;
+  const bangHalf = (bangCount - 1) / 2;
+  for (let i = 0; i < bangCount; i++) {
+    const k = i - bangHalf;
+    const h = 0.110 + (bangHalf - Math.abs(k)) * 0.014;
+    const bang = add(head,
+      hairStrand(h, bangCount === 4 ? 0.046 : 0.036, 0.016), p.hair,
+      [k * (bangCount === 4 ? 0.050 : 0.037) - 0.008, 0.134 - i * 0.004, 0.102],
       { rot: [Math.PI, 0, k * 0.085 - 0.10] });
     bang.renderOrder = 1;
   }
@@ -299,10 +317,13 @@ export function createRig(p: CharacterPalette): Rig {
 
   for (const side of [-1, 1]) {
     // 鬓发：圆润胶囊 + 一小束细发梢，贴脸但不压眼
+    const longSide = variant === 'FEI' ? 1.42 : 1;
     add(head, cached('sideburn', () => new THREE.CapsuleGeometry(0.030, 0.16, 3, 10)), p.hair,
-      [side * 0.121, -0.032, 0.012], { scale: [1, 1, 0.72] });
+      [side * 0.121, -0.032 - (longSide - 1) * 0.04, 0.012],
+      { scale: [1, longSide, 0.72] });
     add(head, cached('sideTip', () => new THREE.CapsuleGeometry(0.018, 0.075, 3, 8)), p.hair,
-      [side * 0.133, -0.098, 0.026], { scale: [1, 1, 0.70], rot: [0, 0, side * 0.18] });
+      [side * 0.133, -0.098 - (longSide - 1) * 0.09, 0.026],
+      { scale: [1, longSide * 0.70, 0.70], rot: [0, 0, side * 0.18] });
     // 腮红与鼻影
     decal(head, sphere(0.026, 10, 8), p.lip, [side * 0.086, -0.020, 0.106], [1, 0.48, 0.24], 0.30);
     decal(head, sphere(0.010, 8, 6), p.skinShade,
@@ -343,8 +364,11 @@ export function createRig(p: CharacterPalette): Rig {
     seg.position.y = i === 0 ? -0.02 : -0.20;
     hairParent.add(seg);
     hair.push(seg);
-    const r = 0.058 - i * 0.010;
-    add(seg, tuft(r, 0.24), i >= 3 ? p.hairHi : i === 1 ? p.hairHi : p.hair,
+    // FEI 马尾更蓬松、RIN 更细长：只换网格半径，hair 关节链的 position 保持契约
+    const r = (0.058 - i * 0.010) * (variant === 'FEI' ? 1.18 : 1);
+    // RIN 是细长高马尾、FEI 是蓬松短马尾：背影剪影一眼可分
+    const len = variant === 'FEI' ? 0.24 : 0.31;
+    add(seg, tuft(r, len), i >= 3 ? p.hairHi : i === 1 ? p.hairHi : p.hair,
       [0, 0.018, -0.02 - i * 0.025], { scale: [1, 1, 0.88], outline: i === 0 ? 1.05 : 0 });
     hairParent = seg;
   }
@@ -353,7 +377,14 @@ export function createRig(p: CharacterPalette): Rig {
   for (const side of ['L', 'R'] as const) {
     const s = side === 'L' ? -1 : 1;
     const shoulder = joint(chest, `shoulder${side}`, [s * 0.215, 0.005, 0]);
-    add(shoulder, sphere(0.086, 18, 14), p.top, [0, 0, 0], { scale: [1, 0.92, 0.92], outline: 1.06 });
+    // 肩球收小，肩线不再像两颗圆球顶着脑袋
+    add(shoulder, sphere(0.078, 18, 14), p.top, [0, 0, 0], { scale: [1, 0.92, 0.92], outline: 1.06 });
+    // FEI 双侧外扩护肩、RIN 只有布袖：肩线一宽一窄，远看剪影不再相同
+    if (variant === 'FEI') {
+      const pauldron = add(shoulder, sphere(0.102, 16, 12), p.topDark,
+        [s * 0.010, 0.028, -0.004], { scale: [1.12, 0.52, 1.00], outline: 1.04 });
+      pauldron.rotation.z = -s * 0.20;
+    }
     // 四肢旋转体两端必须收口到半径 0：留平口时 BackSide 描边壳会从斜下方
     // 露出一圈黑色内壁，两臂举在胸前时会连成一道突兀的黑弧。
     add(shoulder, lathe([
@@ -380,6 +411,9 @@ export function createRig(p: CharacterPalette): Rig {
     ]), p.skin, [0, 0, 0], { scale: [1, 1, 0.94], skin: true, outline: 1.06 });
     add(elbow, cached('wrist', () => new THREE.CylinderGeometry(0.067, 0.065, 0.085, 16)),
       p.topDark, [0, -0.235, 0], { scale: [1, 1, 0.94] });
+    // 腕带：袖口与拳套之间再压一道亮色细环，近看有层次而不是一整块球
+    const wristBand = decal(elbow, ring(0.066, 0.008), p.trim, [0, -0.266, 0]);
+    wristBand.rotation.x = Math.PI / 2;
     // 拳套与护腕半径贴合：刻意放大球会让两个带描边的曲面互穿，交界处出现锯齿毛边
     add(elbow, sphere(0.056, 18, 14), p.gloves,
       [0, -0.305, 0], { scale: [1, 0.88, 1.08], outline: 1.06 });

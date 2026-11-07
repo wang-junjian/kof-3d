@@ -98,6 +98,13 @@ check('外形几何确实精修：三角面增加、方块件减少、网格规�
   first.rig.boxes < RIG_BASELINE.boxes * 0.65 &&
   first.rig.meshes < RIG_BASELINE.meshes * 1.75,
   `tris ${RIG_BASELINE.triangles}→${first.rig.triangles}, boxes ${RIG_BASELINE.boxes}→${first.rig.boxes}, meshes ${RIG_BASELINE.meshes}→${first.rig.meshes}`);
+// 剪影差异必须来自网格（护肩 / 刘海片数 / 马尾粗细），不能靠改骨骼层级凑出来：
+// 骨架指纹两人仍须逐字相同，否则 limbs() 坐标探针与全部动作断言都会失效。
+check('两人剪影确实不同，但骨架契约完全一致',
+  first.rigPair[0] && first.rigPair[1] &&
+  Math.abs(first.rigPair[0].triangles - first.rigPair[1].triangles) > 200 &&
+  first.rigPair[0].skeleton === first.rigPair[1].skeleton,
+  `RIN=${first.rigPair[0]?.triangles} tris, FEI=${first.rigPair[1]?.triangles} tris`);
 const htmlSource = fs.readFileSync(target, 'utf8');
 const htmlBytes = fs.statSync(target).size;
 // 默认版由 scripts/inline.mjs 的 inject('') 产出，不注入任何 VRM / 2D 贴图数据。
@@ -598,6 +605,95 @@ const airReach = await page.evaluate(async () => {
 const airFootGain = airReach.jhk.footR[0] - airReach.idle.footR[0];
 check('跳跃重踢朝对手方向踢出（骨骼末端实测）', airFootGain > 0.40,
   `脚前伸=${airFootGain.toFixed(2)} 世界单位`);
+
+// ── 镜像契约：AI 侧（p2）也必须朝自己的对手出招 ──────────────────────────
+// 姿态表只按 facing=+1 标定，p2 靠 root.scale.x=-1 做几何镜像。旧的三条伸展
+// 断言全用 limbs(0)，AI 侧主攻肢体朝镜头甚至背后也能全绿。这里用
+// setPose({side:1}) 把同一关键帧摆到 p2，逐招量化「末端相对角色中心」的
+// 绝对坐标：严格镜像时 p1/p2 应互为相反数，连朝镜头的 Z 深度都相同。
+// 不用「相对 idle 的增量」做对称判据：待机呼吸相位不同会引入约 0.15 的采样噪声。
+const mirror = await page.evaluate(async () => {
+  const k = window.__kof;
+  const wait = () => new Promise((r) => requestAnimationFrame(r));
+  const settle = async (side) => {
+    for (let i = 0; i < 30; i++) {
+      await wait();
+      const a = k.snapshot().anim[side];
+      if (a.tag === 'idle' && a.maxDelta < 0.012) break;
+    }
+  };
+  const sample = async (side, move, frame, opts = {}) => {
+    k.setPose('idle', null, 0, { side }); await settle(side);
+    const idle = k.limbs(side);
+    const x = side === 0 ? k.match.p1.x : k.match.p2.x;
+    k.setPose('attack', move, frame, { side, ...opts }); await wait(); await wait();
+    const atk = k.limbs(side);
+    return {
+      fist: atk.fistR[0] - x, foot: atk.footR[0] - x,
+      fistZ: atk.fistR[2], footZ: atk.footR[2],
+      fistGain: atk.fistR[0] - idle.fistR[0],
+      footGain: atk.footR[0] - idle.footR[0],
+      headZ: idle.headFront[2],
+    };
+  };
+  const defs = [
+    ['LP', 'LP', 3, {}], ['HP', 'HP', 7, {}], ['LK', 'LK', 4, {}],
+    ['HK', 'HK', 9, {}], ['SWEEP', 'SWEEP', 8, {}],
+    ['JLP', 'JLP', 3, { airborne: true, y: 0.26 }],
+    ['JHK', 'JHK', 5, { airborne: true, y: 0.26 }],
+    ['SUPER', 'SUPER', 10, {}],
+  ];
+  const rows = [];
+  for (const [name, id, frame, opts] of defs) {
+    rows.push({ name, p1: await sample(0, id, frame, opts), p2: await sample(1, id, frame, opts) });
+  }
+  await wait();
+  const scale = k.snapshot().viewScale;
+  const superBox = { ...k.moves.SUPER.hitbox };
+  k.clearPose();
+  return { rows, scale, superBox };
+});
+const mHP = mirror.rows.find((r) => r.name === 'HP');
+const mHK = mirror.rows.find((r) => r.name === 'HK');
+check('AI 侧重拳朝自己的对手伸出（几何镜像生效）', mHP.p2.fistGain < -0.20,
+  `p2 拳前伸=${mHP.p2.fistGain.toFixed(2)} 世界单位`);
+check('AI 侧重踢朝自己的对手踢出（几何镜像生效）', mHK.p2.footGain < -0.40,
+  `p2 脚前伸=${mHK.p2.footGain.toFixed(2)} 世界单位`);
+const worstPair = Math.max(...mirror.rows.flatMap((r) => [
+  Math.abs(r.p1.fist + r.p2.fist), Math.abs(r.p1.foot + r.p2.foot),
+  Math.abs(r.p1.fistZ - r.p2.fistZ), Math.abs(r.p1.footZ - r.p2.footZ),
+]));
+check('双方 8 招主攻末端严格镜像对称（含朝镜头深度）', worstPair < 0.05,
+  `最大不对称=${worstPair.toFixed(4)} 世界单位`);
+const headMin = Math.min(...mirror.rows.flatMap((r) => [r.p1.headZ, r.p2.headZ]));
+check('负缩放未把两人转成侧脸（头部正面仍朝镜头）', headMin > 0.90,
+  `最小 headFront.z=${headMin.toFixed(3)}`);
+check('镜像契约：root.scale.x 与 facing 一致',
+  mirror.scale[0] === 1 && mirror.scale[1] === -1,
+  `viewScale=[${mirror.scale.join(', ')}]`);
+
+// 8 招伸展下限：把审查里的幅度表固化成契约，防止姿态表再被调回「微幅」。
+// 用末端相对角色中心的绝对坐标（含超必杀前冲），而不是相对 idle 的增量——
+// 待机呼吸相位不同会给增量带来约 0.15 的采样噪声。
+const REACH_MIN = {
+  LP: { part: 'fist', min: 0.66 }, HP: { part: 'fist', min: 0.66 },
+  JLP: { part: 'fist', min: 0.64 }, SUPER: { part: 'fist', min: 0.72 },
+  LK: { part: 'foot', min: 0.84 }, HK: { part: 'foot', min: 1.02 },
+  SWEEP: { part: 'foot', min: 0.60 }, JHK: { part: 'foot', min: 1.00 },
+};
+const reachRows = mirror.rows.map((r) => {
+  const spec = REACH_MIN[r.name];
+  const v = Math.abs(r.p1[spec.part]);
+  return { name: r.name, v, min: spec.min, ok: v >= spec.min };
+});
+check('8 个招式主攻末端伸展量全部达标（姿态表下限契约）',
+  reachRows.every((r) => r.ok),
+  reachRows.map((r) => `${r.name} ${r.v.toFixed(2)}≥${r.min}`).join('  '));
+const superFist = mirror.rows.find((r) => r.name === 'SUPER').p1.fist;
+const hpFist = mirror.rows.find((r) => r.name === 'HP').p1.fist;
+check('超必杀前冲让拳头落进判定框中心，且明显长于重拳',
+  superFist >= mirror.superBox.x - 0.10 && superFist > hpFist + 0.03,
+  `SUPER 拳=${superFist.toFixed(3)}, HP 拳=${hpFist.toFixed(3)}, 判定框中心=${mirror.superBox.x}`);
 
 await page.evaluate(() => window.__kof.setPose('idle', null, 0));
 await sleep(420);

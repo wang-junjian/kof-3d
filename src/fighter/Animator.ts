@@ -22,17 +22,20 @@ const easeOut = (t: number): number => 1 - (1 - t) * (1 - t);
  */
 const BASE: JointAngles = {
   pelvis: [0, 0, 0.02],
-  torso: [-0.06, -0.10, 0],
+  torso: [-0.06, -0.06, 0],
   chest: [0.02, 0.04, 0],
-  head: [0.02, 0, -0.03],
-  shoulderL: [-1.02, -0.08, -0.02],
-  elbowL: [-1.68, 0, -0.10],
-  shoulderR: [-0.92, 0.08, -0.28],
-  elbowR: [-1.70, 0, 0.10],
-  hipL: [-0.12, 0, 0.06],
-  kneeL: [0.22, 0, 0],
-  hipR: [0.08, 0, -0.06],
-  kneeR: [0.16, 0, 0],
+  // 轻微收下巴即可：低头过多会压住眼睛，Q 版脸的大眼反而显不出来
+  head: [0.04, 0, -0.03],
+  // 双拳收在胸前中线：两肩 Z 分量反号，把左右上臂都往身体中线收，
+  // 而不是一臂外张、一臂贴脸的「抱胸」。肘角收到 -1.55 让拳落在胸口而非脸颊。
+  shoulderL: [-1.05, -0.10, 0.24],
+  elbowL: [-1.55, 0, -0.12],
+  shoulderR: [-1.05, 0.10, -0.24],
+  elbowR: [-1.55, 0, 0.12],
+  hipL: [-0.14, 0, 0.06],
+  kneeL: [0.30, 0, 0],
+  hipR: [0.10, 0, -0.06],
+  kneeR: [0.26, 0, 0],
   hair: [0.12, 0, 0],
 };
 
@@ -170,14 +173,14 @@ const ATTACKS: Record<PoseKey, { windup: Pose; strike: Pose; follow: Pose }> = {
       shoulderL: [-1.05, -0.08, 0.20], elbowL: [-1.42, 0, -0.10],
     }, 0, -0.05),
     strike: withBase({
-      torso: [0.10, -0.22, 0], chest: [0.06, -0.06, 0],
-      shoulderR: [-1.45, 0.10, 1.15], elbowR: [0, 0, 0],
+      torso: [0.10, -0.16, 0], chest: [0.06, -0.06, 0],
+      shoulderR: [-1.00, 0.10, 1.20], elbowR: [0, 0, 0],
       shoulderL: [-1.10, -0.08, -0.30], elbowL: [-1.50, 0, -0.10],
       hipL: [-0.08, 0, 0.10],
     }, 0.02, 0.07, 0.3, 1),
     follow: withBase({
-      torso: [0.16, -0.20, 0], chest: [0.08, -0.06, 0],
-      shoulderR: [-1.32, 0.10, 0.98], elbowR: [-0.22, 0, 0],
+      torso: [0.16, -0.14, 0], chest: [0.08, -0.06, 0],
+      shoulderR: [-0.92, 0.10, 1.02], elbowR: [-0.22, 0, 0],
       shoulderL: [-1.08, -0.08, -0.28], elbowL: [-1.48, 0, -0.10],
     }, 0.02, 0.09, 0.55, 0.7),
   },
@@ -189,14 +192,14 @@ const ATTACKS: Record<PoseKey, { windup: Pose; strike: Pose; follow: Pose }> = {
       hipL: [-0.14, 0, -0.10], kneeL: [0.30, 0, 0.06],
     }, -0.06, -0.14),
     strike: withBase({
-      torso: [0.22, -0.38, 0], chest: [0.10, -0.12, 0], head: [0.08, 0, 0],
-      shoulderR: [-1.65, 0.14, 1.25], elbowR: [0, 0, 0],
+      torso: [0.22, -0.26, 0], chest: [0.10, -0.08, 0], head: [0.08, 0, 0],
+      shoulderR: [-1.20, 0.14, 1.35], elbowR: [0, 0, 0],
       shoulderL: [-1.12, -0.10, -0.48], elbowL: [-1.52, 0, -0.14],
       hipL: [0.10, 0, 0.20], hipR: [-0.12, 0, -0.14],
     }, 0.04, 0.17, 0.7, 1),
     follow: withBase({
-      torso: [0.30, -0.36, 0], chest: [0.14, -0.12, 0], head: [0.06, 0, 0],
-      shoulderR: [-1.55, 0.14, 1.05], elbowR: [-0.20, 0, 0],
+      torso: [0.30, -0.24, 0], chest: [0.14, -0.08, 0], head: [0.06, 0, 0],
+      shoulderR: [-1.12, 0.14, 1.14], elbowR: [-0.20, 0, 0],
       shoulderL: [-1.10, -0.10, -0.44], elbowL: [-1.50, 0, -0.14],
       hipL: [0.06, 0, 0.16], hipR: [-0.10, 0, -0.12],
     }, 0.03, 0.20, 1.0, 0.8),
@@ -278,16 +281,16 @@ const ATTACKS: Record<PoseKey, { windup: Pose; strike: Pose; follow: Pose }> = {
       hair: [0.30, 0, 0],
     }, 0, -0.06, 0.35),
     strike: withBase({
-      torso: [0.24, -0.24, 0], chest: [0.10, -0.08, 0], head: [0.12, 0, 0],
-      shoulderR: [-1.42, 0.10, 1.18], elbowR: [0, 0, 0],
+      torso: [0.24, -0.18, 0], chest: [0.10, -0.08, 0], head: [0.12, 0, 0],
+      shoulderR: [-1.00, 0.10, 1.22], elbowR: [0, 0, 0],
       shoulderL: [-1.06, -0.08, -0.34], elbowL: [-1.50, 0, -0.10],
       hipL: [-0.12, 0, 0.38], kneeL: [0.74, 0, -0.10],
       hipR: [0.02, 0, 0.26], kneeR: [0.60, 0, 0.06],
       hair: [-0.34, 0, 0],
     }, 0.02, 0.12, 0.6, 1),
     follow: withBase({
-      torso: [0.20, -0.22, 0], chest: [0.08, -0.08, 0], head: [0.10, 0, 0],
-      shoulderR: [-1.30, 0.10, 0.94], elbowR: [-0.24, 0, 0],
+      torso: [0.20, -0.16, 0], chest: [0.08, -0.08, 0], head: [0.10, 0, 0],
+      shoulderR: [-0.92, 0.10, 0.98], elbowR: [-0.24, 0, 0],
       shoulderL: [-1.04, -0.08, -0.30], elbowL: [-1.48, 0, -0.10],
       hipL: [-0.12, 0, 0.36], kneeL: [0.70, 0, -0.10],
       hipR: [0.02, 0, 0.24], kneeR: [0.58, 0, 0.06],
@@ -330,21 +333,32 @@ const ATTACKS: Record<PoseKey, { windup: Pose; strike: Pose; follow: Pose }> = {
       hair: [0.66, 0, 0],
     }, -0.12, -0.26, 0.85),
     strike: withBase({
-      torso: [0.42, -0.52, 0], chest: [0.20, -0.16, 0], head: [0.16, 0, 0],
-      shoulderR: [-1.80, 0.18, 1.46], elbowR: [0, 0, 0],
+      torso: [0.42, -0.32, 0], chest: [0.20, -0.10, 0], head: [0.16, 0, 0],
+      shoulderR: [-1.10, 0.18, 1.55], elbowR: [0, 0, 0],
       shoulderL: [-1.22, -0.12, -0.66], elbowL: [-1.60, 0, -0.14],
       hipL: [0.22, 0, 0.30], hipR: [-0.22, 0, -0.24],
       hair: [-0.76, 0, 0],
     }, 0.10, 0.32, 1.0, 1),
     follow: withBase({
-      torso: [0.46, -0.48, 0], chest: [0.22, -0.16, 0], head: [0.12, 0, 0],
-      shoulderR: [-1.66, 0.18, 1.24], elbowR: [-0.28, 0, 0],
+      torso: [0.46, -0.30, 0], chest: [0.22, -0.10, 0], head: [0.12, 0, 0],
+      shoulderR: [-1.02, 0.18, 1.30], elbowR: [-0.28, 0, 0],
       shoulderL: [-1.20, -0.12, -0.60], elbowL: [-1.58, 0, -0.14],
       hipL: [0.18, 0, 0.26], hipR: [-0.18, 0, -0.20],
       hair: [-0.60, 0, 0],
     }, 0.07, 0.34, 1.0, 0.85),
   },
 };
+
+/**
+ * 超必杀的整体前冲：手臂长度已经把拳头限制在中心前方约 0.61，而 SUPER 的
+ * 判定框中心在 0.82（x=0.82, w=1.05）——不出前冲，画面上拳头永远比判定短一截，
+ * 也看不出与重拳的档次差。这里只挪视觉位置，判定仍按 f.x 走；前冲量乘 facing，
+ * 因此 p2 与 p1 严格镜像。重拳/轻拳给一点点前压，保持「轻→重→必杀」的幅度阶梯。
+ */
+ATTACKS.super.strike.rootX = 0.22;
+ATTACKS.super.follow.rootX = 0.14;
+ATTACKS.punchH.strike.rootX = 0.05;
+ATTACKS.punchH.follow.rootX = 0.03;
 
 /**
  * 姿态缓冲：复用于最终 displayed 的双缓冲，以及 crouch/guard/落地等分支的中间结果。
@@ -355,7 +369,7 @@ const ATTACKS: Record<PoseKey, { windup: Pose; strike: Pose; follow: Pose }> = {
 function makePoseBuffer(): Pose {
   const j: JointAngles = {};
   for (const name of JOINTS) j[name] = [0, 0, 0];
-  return { j, rootY: 0, lean: 0, hair: 0, impact: 0 };
+  return { j, rootY: 0, rootX: 0, lean: 0, hair: 0, impact: 0 };
 }
 
 /**
@@ -372,6 +386,7 @@ function blend(a: Pose, b: Pose, t: number, out: Pose = makePoseBuffer()): Pose 
     v[2] = lerp(av[2], bv[2], t);
   }
   out.rootY = lerp(a.rootY ?? 0, b.rootY ?? 0, t);
+  out.rootX = lerp(a.rootX ?? 0, b.rootX ?? 0, t);
   out.lean = lerp(a.lean ?? 0, b.lean ?? 0, t);
   out.hair = lerp(a.hair ?? 0, b.hair ?? 0, t);
   out.impact = lerp(a.impact ?? 0, b.impact ?? 0, t);
@@ -385,6 +400,7 @@ function clonePose(p: Pose, out: Pose = makePoseBuffer()): Pose {
     o[0] = v[0]; o[1] = v[1]; o[2] = v[2];
   }
   out.rootY = p.rootY ?? 0;
+  out.rootX = p.rootX ?? 0;
   out.lean = p.lean ?? 0;
   out.hair = p.hair ?? 0;
   out.impact = p.impact ?? 0;
@@ -399,13 +415,13 @@ function idlePose(time: number, id: number): Pose {
     pelvis: [0, 0, 0.02 + shift * 0.055],
     torso: [-0.06 + breath * 0.035, -0.06 + shift * 0.070, -shift * 0.025],
     chest: [0.02 - breath * 0.018, 0.02, 0],
-    head: [0.02 - breath * 0.022, -0.03 + shift * 0.040, -0.03 - shift * 0.030],
-    shoulderL: [-1.02 - breath * 0.040, -0.08, -0.02],
-    shoulderR: [-0.92 + breath * 0.040, 0.08, -0.28],
-    hipL: [-0.12 + shift * 0.050, 0, 0.06],
-    hipR: [0.08 - shift * 0.050, 0, -0.06],
-    kneeL: [0.22 + shift * 0.090, 0, 0],
-    kneeR: [0.16 - shift * 0.090, 0, 0],
+    head: [0.04 - breath * 0.022, -0.03 + shift * 0.040, -0.03 - shift * 0.030],
+    shoulderL: [-1.05 - breath * 0.040, -0.10, 0.24],
+    shoulderR: [-1.05 + breath * 0.040, 0.10, -0.24],
+    hipL: [-0.14 + shift * 0.050, 0, 0.06],
+    hipR: [0.10 - shift * 0.050, 0, -0.06],
+    kneeL: [0.30 + shift * 0.090, 0, 0],
+    kneeR: [0.26 - shift * 0.090, 0, 0],
   }, breath * 0.018, 0, 0.12);
 }
 
@@ -416,15 +432,15 @@ function walkPose(phase: number): Pose {
     pelvis: [0.03, s * 0.11, s * 0.05],
     torso: [-0.01, -s * 0.13, 0],
     chest: [0.02, -s * 0.05, 0],
-    head: [0.02, -s * 0.04, -0.03],
-    shoulderL: [-1.02 - s * 0.24, -0.08, -0.02 + s * 0.20],
-    shoulderR: [-0.92 + s * 0.24, 0.08, -0.28 + s * 0.20],
-    elbowL: [-1.68 + s * 0.10, 0, -0.10],
-    elbowR: [-1.70 - s * 0.10, 0, 0.10],
-    hipL: [-0.12 + s * 0.30, 0, 0.06 + s * 0.30],
-    kneeL: [0.22 + Math.max(0, -s) * 0.42, 0, -0.08],
-    hipR: [0.08 - s * 0.30, 0, -0.06 - s * 0.30],
-    kneeR: [0.16 + Math.max(0, s) * 0.42, 0, 0.08],
+    head: [0.04, -s * 0.04, -0.03],
+    shoulderL: [-1.05 - s * 0.24, -0.10, 0.24 + s * 0.20],
+    shoulderR: [-1.05 + s * 0.24, 0.10, -0.24 + s * 0.20],
+    elbowL: [-1.55 + s * 0.10, 0, -0.12],
+    elbowR: [-1.55 - s * 0.10, 0, 0.12],
+    hipL: [-0.14 + s * 0.30, 0, 0.06 + s * 0.30],
+    kneeL: [0.30 + Math.max(0, -s) * 0.42, 0, -0.08],
+    hipR: [0.10 - s * 0.30, 0, -0.06 - s * 0.30],
+    kneeR: [0.26 + Math.max(0, s) * 0.42, 0, 0.08],
   }, Math.abs(Math.sin(phase)) * 0.026 - 0.012, 0.045, 0.25 + Math.abs(s) * 0.12);
 }
 

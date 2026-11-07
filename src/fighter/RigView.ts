@@ -123,11 +123,19 @@ export class RigView implements CharacterView {
     }
     for (const [name, v] of this.overrides) r.joints[name].rotation.set(v[0], v[1], v[2]);
 
-    r.root.position.set(f.x, f.y + (pose.rootY ?? 0), 0);
+    // 发力帧的整体前冲：只挪视觉位置，判定框仍按 f.x 计算；乘 facing 保证 p2 朝自己的对手冲。
+    const lunge = (pose.rootX ?? 0) * f.facing;
+    r.root.position.set(f.x + lunge, f.y + (pose.rootY ?? 0), 0);
     // 3/4 侧身：保留四肢横向投影宽度，同时让几何五官仍有立体透视
     r.root.rotation.set(0, f.facing * 0.72, (pose.lean ?? 0) * f.facing);
-    // 头部转回镜头，保证两只眼睛都能被看见
-    r.joints.head.rotation.y = -f.facing * 0.52;
+    // 姿态表只按 facing=+1（对手在画面右）标定。p2 用几何镜像把整副骨架沿
+    // 世界 X 翻过去，主攻肢体才会朝自己的对手伸展；只把欧拉角取反做不到严格
+    // 镜像（Ry(fθ)·diag(f,1,1) === diag(-1,1,1)·Ry(+θ)），实测前伸量会差一半。
+    // three.js 会自动按 determinant<0 翻转三角形绕序，BackSide 描边壳也随之生效。
+    r.root.scale.x = f.facing;
+    // 头部转回镜头：镜像已自动翻转子节点的 Y 旋转，补偿量必须是常量；
+    // 再乘一次 facing 会让 p2 转成侧脸。
+    r.joints.head.rotation.y = -0.52;
 
     // 眨眼：两人错开相位，避免同步眨眼显得像木偶
     const ph = (time + f.id * 83 + 40) % 186;
@@ -154,7 +162,7 @@ export class RigView implements CharacterView {
     }
 
     const s = Math.max(0.45, 1 - f.y * 0.42);
-    r.shadow.position.x = f.x;
+    r.shadow.position.x = f.x + lunge;
     r.shadow.scale.set(s, 0.42 * s, s);
     (r.shadow.material as THREE.MeshBasicMaterial).opacity = 0.42 * s;
 

@@ -18,10 +18,15 @@ const BONE_MAP: Partial<Record<JointName, { name: VRMHumanBoneName; sign: [numbe
   torso: { name: 'spine', sign: [1, 1, 1] },
   chest: { name: 'chest', sign: [1, 1, 1] },
   head: { name: 'head', sign: [1, 1, 1] },
-  shoulderL: { name: 'rightUpperArm', sign: [1, 1, -1] },
-  elbowL: { name: 'rightLowerArm', sign: [1, 1, 1] },
-  shoulderR: { name: 'leftUpperArm', sign: [1, 1, 1] },
-  elbowR: { name: 'leftLowerArm', sign: [1, 1, 1] },
+  // 手臂 Z 分量的符号必须与程序化骨架相反：VRM rest 是 T-pose，ARM_DROP 已用
+  // +1.32 把 leftUpperArm 压到身侧；若再同号叠加 strike 的大 Z 角（1.35），
+  // 总旋转会翻过 150° 把整条手臂甩到角色背后。取反后落在 ≈0 的水平位，
+  // 配合 root 的 3/4 侧身与几何镜像，才是朝对手伸拳。四条同时取反才能保住
+  // 非出拳臂贴身（只改主攻侧会让另一臂停在 rest 水平位，形成 T-pose）。
+  shoulderL: { name: 'rightUpperArm', sign: [1, 1, 1] },
+  elbowL: { name: 'rightLowerArm', sign: [1, 1, -1] },
+  shoulderR: { name: 'leftUpperArm', sign: [1, 1, -1] },
+  elbowR: { name: 'leftLowerArm', sign: [1, 1, -1] },
   hipL: { name: 'rightUpperLeg', sign: [1, 1, 1] },
   kneeL: { name: 'rightLowerLeg', sign: [1, 1, 1] },
   hipR: { name: 'leftUpperLeg', sign: [1, 1, 1] },
@@ -29,10 +34,11 @@ const BONE_MAP: Partial<Record<JointName, { name: VRMHumanBoneName; sign: [numbe
 };
 
 /**
- * 姿态缩放：程序化骨架的欧拉角幅度是按自造关节调的，VRM 骨骼更敏感，
- * 直接套用会甩过头。不同模型的绑骨轴向略有差异，这里留一个统一旋钮。
+ * 姿态缩放按骨骼组分开：统一的 0.65 会把拳类的前伸压成「手臂向外下方斜伸」，
+ * 而躯干/腿部照单全收又容易甩过头。手臂要完整吃到 strike 的 Z 分量，
+ * 腿与躯干保留保守增益。不同资产绑骨轴向有差异，这里留成分组旋钮。
  */
-const GAIN = 0.65;
+const GAIN = { arm: 1.00, leg: 0.82, body: 0.70 } as const;
 /**
  * 模型正面朝向修正：VRM 0.x 导出常见正面朝 -Z，而舞台相机在 +Z。
  * 若换资产后发现脸朝里，把这个值改成 0 即可。
@@ -156,18 +162,25 @@ export class VrmView implements CharacterView {
       if (!node || !rest) continue;
       const v = pose.j[joint] ?? [0, 0, 0];
       const s = mapping.sign;
-      const isArm = mapping.name === 'leftUpperArm' || mapping.name === 'rightUpperArm';
-      const drop = isArm ? (mapping.name === 'leftUpperArm' ? ARM_DROP : -ARM_DROP) : 0;
-      this.deltaEuler.set(v[0] * s[0] * GAIN, v[1] * s[1] * GAIN, v[2] * s[2] * GAIN + drop);
+      const isArm = mapping.name.includes('Arm');
+      const gain = isArm ? GAIN.arm : mapping.name.includes('Leg') ? GAIN.leg : GAIN.body;
+      const isUpperArm = mapping.name === 'leftUpperArm' || mapping.name === 'rightUpperArm';
+      const drop = isUpperArm ? (mapping.name === 'leftUpperArm' ? ARM_DROP : -ARM_DROP) : 0;
+      this.deltaEuler.set(v[0] * s[0] * gain, v[1] * s[1] * gain, v[2] * s[2] * gain + drop);
       this.deltaQuat.setFromEuler(this.deltaEuler);
       node.quaternion.copy(rest).multiply(this.deltaQuat);
     }
 
-    this.root.position.set(f.x, f.y + (pose.rootY ?? 0), 0);
+    const lunge = (pose.rootX ?? 0) * f.facing;
+    this.root.position.set(f.x + lunge, f.y + (pose.rootY ?? 0), 0);
     this.root.rotation.set(0, f.facing * 0.82, (pose.lean ?? 0) * f.facing);
+    // 与 RigView 同一套镜像契约：姿态表按 facing=+1 标定，p2 必须整副翻过去，
+    // 否则主攻肢体会朝镜头甚至自己背后伸展（VRM 的 springBone/lookAt 在 root 下，
+    // 随父级负缩放一起镜像，不需要额外补偿）。
+    this.root.scale.x = f.facing;
 
     const shade = Math.max(0.45, 1 - f.y * 0.42);
-    this.shadow.position.x = f.x;
+    this.shadow.position.x = f.x + lunge;
     this.shadow.scale.set(shade, 0.42 * shade, shade);
     (this.shadow.material as THREE.MeshBasicMaterial).opacity = 0.42 * shade;
 

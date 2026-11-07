@@ -47,6 +47,11 @@ export class Stage {
     const key = new THREE.DirectionalLight(0xffffff, 1.45);
     key.position.set(3, 6, 6);
     s.add(key);
+    // 背侧轮廓光：从角色身后上方打向镜头，把 5 阶 toon 明暗里容易糊成一片的
+    // 肩线、发梢与手臂外缘勾出来。强度压低，不能盖掉正面的品红/青蓝点光。
+    const rim = new THREE.DirectionalLight(0xa8d4ff, 1.15);
+    rim.position.set(-1.5, 4.2, -5.5);
+    s.add(rim);
     const pink = new THREE.PointLight(0xe0457e, 22, 20);
     pink.position.set(-5, 2.6, 2.2);
     s.add(pink);

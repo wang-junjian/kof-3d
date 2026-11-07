@@ -63,6 +63,10 @@ interface KofSnapshot {
   texturedMeshes: number;
   /** 程序化角色的骨架指纹与网格统计；VRM 模式下为 null。 */
   rig: RigProbe | null;
+  /** 两名角色 root 的 X 缩放：姿态表按 facing=+1 标定，p2 必须为 -1 才朝对手出招。 */
+  viewScale: [number, number];
+  /** 两人各自的外形统计：剪影差异契约（FEI 的护肩/刘海/马尾与 RIN 不同）。 */
+  rigPair: [RigProbe | null, RigProbe | null];
   /** 两名角色当前动作状态，供自检做姿态连续性验证。 */
   anim: [AnimDebug, AnimDebug];
   canvas: { w: number; h: number };
@@ -75,6 +79,8 @@ interface PoseOptions {
   guardLevel?: 'stand' | 'crouch';
   airborne?: boolean;
   y?: number;
+  /** 摆拍对象：默认玩家侧。指定 1 才能给 AI 侧摆关键帧，验证镜像后的动作方向。 */
+  side?: 0 | 1;
 }
 
 interface KofApi {
@@ -97,8 +103,10 @@ interface KofApi {
   clearPose: () => void;
   /** 自检：按帧表返回某个招式的动作分段标签序列。 */
   sampleAttackTags: (id: MoveId) => string[];
-  /** 自检探针：左右拳、左右脚的世界坐标，用于量化伸展方向。 */
-  limbs: (side: 0 | 1) => { fistL: number[]; fistR: number[]; footL: number[]; footR: number[] } | null;
+  /** 自检探针：左右拳、左右脚的世界坐标，以及头部正面朝向向量，用于量化伸展方向与正脸。 */
+  limbs: (side: 0 | 1) => {
+    fistL: number[]; fistR: number[]; footL: number[]; footR: number[]; headFront: number[];
+  } | null;
   /** 调试钩子：实时覆盖关节角，用于标定动作；不参与正常渲染。 */
   setJoint: (joint: JointName, angles: [number, number, number]) => void;
   clearJoints: () => void;
@@ -150,8 +158,8 @@ const input = new InputBuffer();
 
 // 默认纯 3D 程序化角色；若构建时放入 assets/character.vrm，则异步热替换为 VRM 渲染层
 let views: CharacterView[] = [
-  new RigView(createRig(RIN)),
-  new RigView(createRig(FEI)),
+  new RigView(createRig(RIN, 'RIN')),
+  new RigView(createRig(FEI, 'FEI')),
 ];
 for (const view of views) {
   stage.scene.add(view.root);
@@ -353,32 +361,36 @@ const setPose = (state: FighterState, moveId?: MoveId | null, frame = 0, opts: P
   poseLock = true;
   const airMove = moveId ? MOVES[moveId].air === true : false;
   const airborne = opts.airborne ?? (state === 'jump' || airMove);
-  const p1 = match.p1;
-  p1.state = state;
-  p1.stateFrame = frame;
-  p1.move = moveId ? MOVES[moveId] : null;
-  p1.moveFrame = frame;
-  p1.hitId++;
-  p1.stunLeft = 24;
-  p1.landingStun = 0;
+  // side=1 时把同一套摆拍作用于 AI 侧：两人 facing / x 互为镜像，
+  // 这样 limbs(1) 的能量化「对方」的动作是否也朝自己的对手伸展。
+  const side = opts.side ?? 0;
+  const subject = side === 1 ? match.p2 : match.p1;
+  const other = side === 1 ? match.p1 : match.p2;
+  subject.state = state;
+  subject.stateFrame = frame;
+  subject.move = moveId ? MOVES[moveId] : null;
+  subject.moveFrame = frame;
+  subject.hitId++;
+  subject.stunLeft = 24;
+  subject.landingStun = 0;
   // 摆拍会冻结逻辑，受击闪红不会自然衰减，必须主动清掉
-  p1.flash = 0;
+  subject.flash = 0;
   // 摆拍时抬得太高会超出拼图裁剪区，默认留出头顶余量
-  p1.y = airborne ? (opts.y ?? 0.26) : 0;
-  p1.vy = 0; p1.vx = 0;
-  p1.airborne = airborne;
-  p1.guarding = state === 'guard';
-  p1.guardLevel = state === 'guard' ? (opts.guardLevel ?? 'crouch') : null;
-  p1.crouching = state === 'crouch' || (state === 'guard' && p1.guardLevel === 'crouch');
-  p1.x = -0.92;
-  p1.facing = 1;
-  const p2 = match.p2;
-  p2.state = 'idle'; p2.move = null; p2.moveFrame = 0;
-  p2.x = 0.92; p2.y = 0; p2.vy = 0; p2.vx = 0;
-  p2.airborne = false; p2.facing = -1;
-  p2.guarding = false; p2.guardLevel = null; p2.crouching = false;
-  p2.landingStun = 0;
-  p2.flash = 0;
+  subject.y = airborne ? (opts.y ?? 0.26) : 0;
+  subject.vy = 0; subject.vx = 0;
+  subject.airborne = airborne;
+  subject.guarding = state === 'guard';
+  subject.guardLevel = state === 'guard' ? (opts.guardLevel ?? 'crouch') : null;
+  subject.crouching = state === 'crouch' || (state === 'guard' && subject.guardLevel === 'crouch');
+  subject.x = side === 1 ? 0.92 : -0.92;
+  subject.facing = side === 1 ? -1 : 1;
+  other.state = 'idle'; other.move = null; other.moveFrame = 0;
+  other.x = side === 1 ? -0.92 : 0.92;
+  other.y = 0; other.vy = 0; other.vx = 0;
+  other.airborne = false; other.facing = side === 1 ? 1 : -1;
+  other.guarding = false; other.guardLevel = null; other.crouching = false;
+  other.landingStun = 0;
+  other.flash = 0;
 };
 
 const clearPose = (): void => {
@@ -451,6 +463,12 @@ const showSuper = (): void => {
   if (fx.canGhost()) fx.ghost(views[0].ghost?.() ?? null, 0xff7fb2, 1);
 };
 
+const rigProbe = (i: 0 | 1): RigProbe | null => {
+  const v = views[i];
+  if (!(v instanceof RigView)) return null;
+  return { skeleton: v.skeletonSignature(), ...v.geometryStats() };
+};
+
 window.__kof = {
   ready: true,
   match,
@@ -466,11 +484,16 @@ window.__kof = {
   limbs: (side: 0 | 1) => {
     const v = views[side];
     if (!(v instanceof RigView)) return null;
+    // 头部局部 +Z 是脸的正面；取两点之差得到世界朝向，用来检测 p2 是否被
+    // 重复的头部补偿转成侧脸（z 分量会明显掉下去）。
+    const o = v.worldPoint('head', [0, 0, 0]);
+    const n = v.worldPoint('head', [0, 0, 0.1]);
     return {
       fistL: v.worldPoint('elbowL', [0, -0.305, 0]),
       fistR: v.worldPoint('elbowR', [0, -0.305, 0]),
       footL: v.worldPoint('kneeL', [0, -0.43, 0.052]),
       footR: v.worldPoint('kneeR', [0, -0.43, 0.052]),
+      headFront: [(n[0] - o[0]) * 10, (n[1] - o[1]) * 10, (n[2] - o[2]) * 10],
     };
   },
   controls: {
@@ -527,11 +550,9 @@ window.__kof = {
     comboText: document.getElementById('combo1')?.textContent ?? '',
     koVignette: document.getElementById('ko-vignette')?.classList.contains('on') ?? false,
     texturedMeshes: views.reduce((n, v) => n + (v instanceof RigView ? v.texturedMeshes : 0), 0),
-    rig: (() => {
-      const v = views[0];
-      if (!(v instanceof RigView)) return null;
-      return { skeleton: v.skeletonSignature(), ...v.geometryStats() };
-    })(),
+    rig: rigProbe(0),
+    rigPair: [rigProbe(0), rigProbe(1)],
+    viewScale: [views[0].root.scale.x, views[1].root.scale.x],
     anim: [animators[0].inspect(), animators[1].inspect()],
     canvas: { w: canvas.width, h: canvas.height },
     glLost: renderer.getContext().isContextLost(),

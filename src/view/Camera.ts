@@ -44,6 +44,9 @@ export class GameCamera {
   readonly cam: THREE.PerspectiveCamera;
   private shake = 0;
   private seed = 991;
+  // 机位高度不能低于 1.55：地板 PlaneGeometry 铺到相机脚下，俯角再小就会
+  // 把角色小腿整段遮住（实测 1.46 时腿部被地板横向切断）。拉近同样减小俯角，
+  // 因此横屏基准距离也保持 5.55，改用轮廓光与几何细节提升角色存在感。
   private readonly baseY = 1.55;
   private x = 0;
   private z = 6.4;

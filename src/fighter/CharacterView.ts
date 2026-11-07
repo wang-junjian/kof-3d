@@ -9,6 +9,8 @@ export type JointAngles = Partial<Record<JointName, V3>>;
 export interface Pose {
   j: JointAngles;
   rootY?: number;
+  /** 发力帧的整体前冲（世界单位，按 facing 取符号）；只影响视觉位置，不改判定坐标。 */
+  rootX?: number;
   lean?: number;
   hair?: number;
   /** 发力冲量 0..1：驱动头发/衣摆的二级动力学，不参与任何判定。 */
