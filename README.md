@@ -29,7 +29,7 @@ npm run dev         # 开发模式（Vite，127.0.0.1）
 
 - `npm run build` 产出的 **`kof-3d.html` 是可离线双击打开的单文件**（`file://` 下零外部请求、无 CDN）。`kof-3d-vrm.html` 是内联 `assets/character.vrm` 的可替换资产槽演示版。
 - 本仓库**只提交源码**：两份单文件 HTML 与 `shots/` 截图都在 `.gitignore` 中，clone 后跑 `npm install && npm run build` 即可得到可玩文件。线上试玩页由 `.github/workflows/pages.yml` 在 push 到 `main` 时自动构建并发布，产物同样不进仓库。
-- `npm run verify` 需要本机 Chrome / Chromium。默认按常见路径自动探测；找不到时设 `CHROME_PATH=/path/to/chrome npm run verify`。拼图与近景图由浏览器 Canvas / `deviceScaleFactor` 生成，**不依赖 ImageMagick**。当前共 **112 条**浏览器断言。
+- `npm run verify` 需要本机 Chrome / Chromium。默认按常见路径自动探测；找不到时设 `CHROME_PATH=/path/to/chrome npm run verify`。拼图与近景图由浏览器 Canvas / `deviceScaleFactor` 生成，**不依赖 ImageMagick**。默认模式执行完整断言集，`npm run smoke` 只跑 boot 段的只读断言；实际通过数由脚本末尾的「结果：X/Y 通过」汇总打印，不在文档中写死数量以免增删断言后失真。
 - 环境：Node 22+。`puppeteer-core` 与 `esbuild` 都已声明在 devDependencies，换机器 `npm install` 即可跑全套自检。
 - 验收顺序固定：`npm test` → `npm run build` → `npm run verify` 连跑两次全绿 → **人工看图**。数值全绿不等于视觉成立，历次靠 `shots/08-detail.png`、`06-poses.png`、`07-impact.png`、`09-super.png`、`10-touch-ui.png`、`11-mobile-landscape.png`、`12-mobile-portrait.png` 发现过姿态、裁切、特效质感、文字可读性、触屏布局与两人出画问题。
 

@@ -38,7 +38,8 @@ const stages = (arr) => [...new Set(arr.map((t) => t.split(':')[0]))];
 
 // --smoke：只跑 boot 段的只读断言（页面零报错 / WebGL / 程序化角色 / 单文件
 // 体积与注入契约 / viewport / HUD / frame>30 / 开局状态），不截图、不打开 VRM
-// 页、不跑长时序链路。默认模式（无参数）仍执行全部 112 条断言，行为不变。
+// 页、不跑长时序链路。默认模式（无参数）仍执行全部断言，行为不变；实际条数
+// 见末尾汇总输出，不在注释里写死，避免增删断言后注释与 CI 步骤名一起失真。
 const SMOKE = process.argv.includes('--smoke');
 
 // 几何精修前的运行时基线（由 RigView.skeletonSignature()/geometryStats() 实测）。

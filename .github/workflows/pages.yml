@@ -41,12 +41,13 @@ jobs:
           diff -u /tmp/h1 /tmp/h2
           git diff --exit-code
 
-      # 浏览器端 112 条自检：CI 显式提供 Chrome（verify.mjs 支持 CHROME_PATH，
+      # 浏览器端完整自检：CI 显式提供 Chrome（verify.mjs 支持 CHROME_PATH，
       # 且会用 fs.existsSync 逐个探测，CHROME_PATH 无效时自动回退到预装 Chrome）。
+      # 断言数量不在步骤名里写死：实际通过数由 verify.mjs 末尾汇总打印。
       # 轻量门禁可把下一行换成 `npm run smoke`。
       - uses: browser-actions/setup-chrome@v1
         id: chrome
-      - name: Browser self-check (112 checks)
+      - name: Browser self-check (full)
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: npm run verify
