@@ -9,12 +9,12 @@ const DIFFICULTY_LABEL: Record<Difficulty, string> = {
 const TEMPLATE = `
 <div class="hud-top">
   <div class="side left">
-    <div class="name"><span class="chip">P1</span> RIN <span class="dots" id="rounds1"></span></div>
+    <div class="name"><span class="chip">P1</span> 绯翎 · 疾影 <span class="dots" id="rounds1"></span></div>
     <div class="hpbar"><div class="hp-lag" id="hp-lag1"></div><div class="hp-fill p1" id="hp1"></div></div>
   </div>
   <div class="timer" id="timer">99</div>
   <div class="side right">
-    <div class="name"><span class="dots" id="rounds2"></span> FEI <span class="chip cyan" id="cpu-label">CPU</span></div>
+    <div class="name"><span class="dots" id="rounds2"></span> 岳铮 · 铁山 <span class="chip cyan" id="cpu-label">CPU</span></div>
     <div class="hpbar flip"><div class="hp-lag" id="hp-lag2"></div><div class="hp-fill p2" id="hp2"></div></div>
   </div>
 </div>
@@ -30,7 +30,7 @@ const TEMPLATE = `
 <div class="winner" id="winner"></div>
 <div class="ko-vignette" id="ko-vignette"></div>
 <div class="screen-flash" id="screen-flash"></div>
-<div class="hud-bottom">A / D 移动 &nbsp;·&nbsp; W 跳跃 &nbsp;·&nbsp; 按住后方向 站防 &nbsp;·&nbsp; 后 + S 蹲防 &nbsp;·&nbsp; S 蹲下 &nbsp;·&nbsp; J 轻拳 &nbsp;·&nbsp; K 重拳 &nbsp;·&nbsp; L 轻踢 &nbsp;·&nbsp; I 重踢 &nbsp;·&nbsp; S + 踢 扫腿 &nbsp;·&nbsp; 空中攻击键 跳攻 &nbsp;·&nbsp; 1 / 2 / 3 难度 &nbsp;·&nbsp; 236（S → S+前 → 前+攻击）超必杀 · 50 POW</div>
+<div class="hud-bottom">A / D 移动 &nbsp;·&nbsp; W 跳跃 &nbsp;·&nbsp; 按住后方向 站防 &nbsp;·&nbsp; 后 + S 蹲防 &nbsp;·&nbsp; S 蹲下 &nbsp;·&nbsp; J 轻拳 &nbsp;·&nbsp; K 重拳 &nbsp;·&nbsp; L 轻踢 &nbsp;·&nbsp; I 重踢 &nbsp;·&nbsp; S + 踢 扫腿 &nbsp;·&nbsp; 空中攻击键 跳攻 &nbsp;·&nbsp; 1 / 2 / 3 难度 &nbsp;·&nbsp; 50 POW<br>→ + K 流光刺 / 铁肩撞 &nbsp;·&nbsp; ↘ + I 燕落 / 踏山（两人招式不同） &nbsp;·&nbsp; 236 千羽连 / 214 崩山拳 &nbsp;·&nbsp; 623 翎升 / 岳起 &nbsp;·&nbsp; 41236 岳落（近身投） &nbsp;·&nbsp; 236236 超必杀（50 POW）&nbsp;·&nbsp; 触屏 236 键 / 手柄 RB 一键必杀，POW 满 50 自动升级超杀 &nbsp;·&nbsp; 千羽连 / 崩山拳 命中后按 K 或 I 追加派生 &nbsp;·&nbsp; 通常技命中后可取消进必杀 / 超杀 &nbsp;·&nbsp; J + K 同按 爆气（攻击 1.5 倍） &nbsp;·&nbsp; 后 + J + I 紧急回避</div>
 `;
 
 export class Hud {

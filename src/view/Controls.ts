@@ -1,13 +1,19 @@
 import {
   INPUT_ROLES, type InputBuffer, type InputRole,
 } from '../core/input';
+import type { CommandId } from '../core/frames';
 import { padMacroPressed, padRoles, type PadLike } from '../core/pad';
 
 export interface ControlsOptions {
-  /** 236 快捷手势要按玩家当前面向注入绝对方向，不能写死向右。 */
+  /** 一键指令要按玩家当前面向注入绝对方向，不能写死向右。 */
   facing: () => 1 | -1;
-  /** intro / roundOver / hitstop 期间不排 236，否则前两帧不进 Match 的输入历史。 */
+  /** intro / roundOver / hitstop 期间不排指令，否则前几帧不进 Match 的输入历史。 */
   canMacro: () => boolean;
+  /**
+   * 一键指令由对局状态决定：POW 不足半槽摇 236 普通必杀，攒够则自动升级成
+   * 236236 超必杀。与 AI「POW 达标时升级超杀」同源，且不新增任何键位。
+   */
+  macroCommand: () => CommandId;
 }
 
 export interface ControlsProbe {
@@ -29,7 +35,7 @@ const TEMPLATE = `
     <button type="button" class="tc-key tc-right" data-role="right" aria-label="右">▶</button>
   </div>
   <div class="tc-actions" aria-label="攻击键">
-    <button type="button" class="tc-key tc-macro" data-macro="qcf" aria-label="236 超必杀">236<small>必杀</small></button>
+    <button type="button" class="tc-key tc-macro" data-macro="qcf" aria-label="一键指令：POW 满 50 自动升级超必杀">236<small>必杀/超杀</small></button>
     <button type="button" class="tc-key tc-atk tc-lp" data-role="LP" aria-label="轻拳">轻拳</button>
     <button type="button" class="tc-key tc-atk tc-hp" data-role="HP" aria-label="重拳">重拳</button>
     <button type="button" class="tc-key tc-atk tc-lk" data-role="LK" aria-label="轻踢">轻踢</button>
@@ -73,7 +79,9 @@ export class Controls {
     const macro = this.root.querySelector<HTMLElement>('[data-macro]') as HTMLElement;
     macro.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      if (this.opts.canMacro()) this.input.queueQcf(this.opts.facing());
+      if (this.opts.canMacro()) {
+        this.input.queueCommand(this.opts.macroCommand(), this.opts.facing());
+      }
       macro.classList.add('down');
       window.setTimeout(() => macro.classList.remove('down'), 130);
     });
@@ -130,14 +138,16 @@ export class Controls {
 
     const macro = padMacroPressed(pad);
     if (macro && !this.prevMacro && this.opts.canMacro()) {
-      this.input.queueQcf(this.opts.facing());
+      this.input.queueCommand(this.opts.macroCommand(), this.opts.facing());
     }
     this.prevMacro = macro;
 
     const connected = pad !== null;
     if (connected !== this.padConnected) {
       this.padConnected = connected;
-      this.hint.textContent = connected ? '手柄已连接 · RB 一键 236' : '';
+      this.hint.textContent = connected
+        ? '手柄已连接 · RB 一键必杀 / 满 50 POW 升级超杀 · 新指令走手摇方向 + 攻击键'
+        : '';
     }
   }
 

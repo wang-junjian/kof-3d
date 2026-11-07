@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { match, ai, frames, input } from './.build/logic.mjs';
+import { match, ai, frames, input, characters } from './.build/logic.mjs';
 
 const EMPTY = { ...input.EMPTY_INPUT, buttons: [] };
 const I = (o = {}) => ({ ...EMPTY, ...o });
@@ -93,8 +93,15 @@ test('受击打断后清掉旧招式，攻击者招式继续播放（snapshot().
   assert.equal(m.p1.move?.id, 'HP'); // 命中者的招式不应被清理
 });
 
-// ── M2：236 指令在 Match 层的完整链路 ───────────────────────────────
+// ── M3：通用指令在 Match 层的完整链路 ───────────────────────────────
+// 手摇序列从 COMMANDS 表生成，测试里不写第二份数字方位；facing 变化时传 -1 即可。
 const F = (o = {}) => ({ ...EMPTY, ...o });
+const commandFrames = (id, facing = 1) => {
+  const def = input.COMMANDS.find((c) => c.id === id);
+  assert.ok(def, `指令 ${id} 必须登记在 COMMANDS`);
+  return def.seq.map((n, i) =>
+    input.notationFrame(n, facing, i === def.seq.length - 1 ? ['HP'] : []));
+};
 const readySuper = () => {
   const { m } = makeMatch();
   m.phase = 'fight';
@@ -111,17 +118,32 @@ const readySuper = () => {
   return m;
 };
 
-test('236 完整链路：↓↘→ + 攻击键扣除半槽并起 SUPER', () => {
+test('236 完整链路：↓↘→ + 攻击键起绯翎的普通必杀，不消费 POW', () => {
   const m = readySuper();
-  for (const f of [
-    F({ down: true }), F({ down: true }),
-    F({ down: true, dir: 1 }), F({ down: true, dir: 1 }),
-    F({ dir: 1, buttons: ['HP'] }),
-  ]) m.step(f);
+  for (const f of commandFrames('236')) m.step(f);
   assert.equal(m.p1.facing, 1);
-  assert.equal(m.p1.move?.id, 'SUPER');
-  assert.equal(m.p1.meter, 100 - frames.SUPER_COST);
+  assert.equal(m.p1.move?.id, characters.FEILING.commands['236']);
+  assert.equal(m.p1.move?.command, '236');
+  assert.equal(m.p1.meter, 100, '普通必杀不扣 POW');
   assert.equal(m.p1.state, 'attack');
+});
+
+test('236236 超必杀：扣半槽并起角色专属超杀（多 hit）', () => {
+  const m = readySuper();
+  for (const f of commandFrames('236236')) m.step(f);
+  assert.equal(m.p1.move?.id, characters.FEILING.superMove);
+  assert.equal(m.p1.move?.command, '236236');
+  assert.equal(m.p1.meter, 100 - frames.SUPER_COST);
+  assert.ok(m.p1.move.hits.length >= 2);
+});
+
+test('镜像站位：面向 -1 时同一指令按相对方位识别，仍起同一招', () => {
+  const m = readySuper();
+  m.p1.x = 0.35;
+  m.p2.x = -0.35;
+  for (const f of commandFrames('236', -1)) m.step(f);
+  assert.equal(m.p1.facing, -1);
+  assert.equal(m.p1.move?.id, characters.FEILING.commands['236']);
 });
 
 test('236 输入窗口有限：摇完方向后隔太久再按攻击键不触发', () => {
@@ -135,11 +157,12 @@ test('236 输入窗口有限：摇完方向后隔太久再按攻击键不触发'
     m.step(EMPTY);
   }
   m.step(F({ dir: 1, buttons: ['HP'] }));
-  assert.notEqual(m.p1.move?.id, 'SUPER');
+  assert.notEqual(m.p1.move?.id, characters.FEILING.commands['236']);
+  assert.notEqual(m.p1.move?.id, characters.FEILING.superMove);
   assert.equal(m.p1.meter, 100, '窗口过期不扣 POW');
 });
 
-test('回合切换清空 236 历史，摇杆输入不跨回合残留', () => {
+test('回合切换清空指令历史，摇杆输入不跨回合残留', () => {
   const m = readySuper();
   m.step(F({ down: true }));
   m.step(F({ down: true, dir: 1 }));
@@ -147,25 +170,23 @@ test('回合切换清空 236 历史，摇杆输入不跨回合残留', () => {
   m.phase = 'fight';
   m.p1.meter = 100;
   m.step(F({ dir: 1, buttons: ['HP'] }));
-  assert.notEqual(m.p1.move?.id, 'SUPER');
+  assert.notEqual(m.p1.move?.id, characters.FEILING.commands['236']);
   assert.equal(m.p1.meter, 100);
 });
 
-test('顿帧期间摇完 236：解冻后仍按 SUPER 结算，POW 只扣一次', () => {
+test('顿帧期间摇完 236：解冻后仍按角色必杀结算，状态机不提前推进', () => {
   const m = readySuper();
-  m.hitstop = 4;
-  for (const f of [
-    F({ down: true }),
-    F({ down: true, dir: 1 }),
-    F({ dir: 1, buttons: ['HP'] }),
-    EMPTY,
-  ]) assert.equal(m.step(f), true, '顿帧期间 step 必须报告冻结');
+  const seq = commandFrames('236');
+  m.hitstop = seq.length;
+  for (const f of seq) assert.equal(m.step(f), true, '顿帧期间 step 必须报告冻结');
   assert.equal(m.hitstop, 0);
   assert.equal(m.p1.state, 'idle', '顿帧里不该推进状态机');
+  assert.equal(m.inputHistory.length, seq.length);
 
   m.step(EMPTY);
-  assert.equal(m.p1.move?.id, 'SUPER');
-  assert.equal(m.p1.meter, 100 - frames.SUPER_COST);
+  assert.equal(m.inputHistory.length, seq.length + 1, '解冻帧也必须记入历史');
+  assert.equal(m.p1.move?.id, characters.FEILING.commands['236']);
+  assert.equal(m.p1.meter, 100, '普通必杀不扣 POW');
 });
 
 test('KO 后倒地动画继续推进：roundOver 期间 stateFrame 增长但角色不再行动', () => {
@@ -230,23 +251,23 @@ test('同帧互击：双方 active 重叠时各结算一次，p2 的招式不再
   assert.equal(m.hitstop, frames.MOVES.SUPER.hitstop, '互击顿帧取较长者');
 });
 
-test('pendingQcf 解冻帧仍记入 236 历史：history +1 且 POW 只扣一次', () => {
+test('pendingQcf / pendingCommands 解冻帧仍记入历史：history +1 且 POW 只扣一次', () => {
   const m = readySuper();
-  m.hitstop = 3;
-  for (const f of [
-    F({ down: true }),
-    F({ down: true, dir: 1 }),
-    F({ dir: 1, buttons: ['HP'] }),  // 该顿帧识别出 236 → pendingQcf=1
-  ]) assert.equal(m.step(f), true, '顿帧必须报告冻结');
-  assert.equal(m.inputHistory.length, 3, '3 个顿帧各记一帧');
-  assert.equal(m.pendingQcf, 1);
+  const seq = commandFrames('236236');
+  m.hitstop = seq.length;
+  for (const f of seq) assert.equal(m.step(f), true, '顿帧必须报告冻结');
+  assert.equal(m.inputHistory.length, seq.length, '每个顿帧都要记入历史');
+  assert.equal(m.pendingQcf, 1, '旧 236 兼容链路同样不能丢');
+  assert.ok(m.pendingCommands.includes('236236'), '顿帧里摇出的长指令必须缓存');
 
   m.step(EMPTY);  // 解冻后的第一个逻辑帧
 
-  assert.equal(m.inputHistory.length, 4, '解冻帧是真实逻辑帧，必须进入 236 历史（修复前仍为 3）');
-  assert.equal(m.p1.move?.id, 'SUPER');
-  assert.equal(m.p1.meter, 100 - frames.SUPER_COST);
+  assert.equal(m.inputHistory.length, seq.length + 1,
+    '解冻帧是真实逻辑帧，必须进入指令历史（修复前仍为 3）');
+  assert.equal(m.p1.move?.id, characters.FEILING.superMove);
+  assert.equal(m.p1.meter, 100 - frames.SUPER_COST, '半槽只扣一次');
   assert.equal(m.pendingQcf, null);
+  assert.equal(m.pendingCommands.length, 0);
 });
 
 test('第 3 局同血量 TIME UP 平局：不偏向 p1，走加赛 roundOver', () => {

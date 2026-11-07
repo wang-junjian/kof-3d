@@ -142,8 +142,11 @@ check('viewport 锁缩放 + Web App 全屏声明已内联进单文件',
   /mobile-web-app-capable/.test(htmlSource) &&
   htmlSource.includes('添加到主屏幕'),
   `meta=${(htmlSource.match(/<meta name="(?:viewport|apple-mobile-web-app-capable|mobile-web-app-capable)"/g) ?? []).length}`);
-check('HUD 关键文案存在（含 236 超必杀提示）',
-  ['RIN', 'FEI', 'ROUND 1', '99', '轻拳', '236'].every((t) => domText.includes(t)));
+check('HUD 关键文案存在（中文角色名 / 指令族 / 攻防系统）',
+  ['绯翎', '岳铮', 'ROUND 1', '99', '轻拳', '236', '236236', '爆气', '回避']
+    .every((t) => domText.includes(t)),
+  `命中 ${['绯翎', '岳铮', 'ROUND 1', '99', '轻拳', '236', '236236', '爆气', '回避']
+    .filter((t) => domText.includes(t)).length}/9 个字面量`);
 check('逻辑帧已推进', first.frame > 30, `frame=${first.frame}, fps=${first.fps}`);
 check('逻辑步/渲染帧双口径统计可用',
   first.fps > 0 && first.renderFps > 0,
@@ -440,9 +443,15 @@ check('Hitstop 期间视觉时间定格、解冻后恢复',
 const koResult = await page.evaluate(() => {
   const m = window.__kof.match;
   const EMPTY = { dir: 0, jump: false, down: false, guard: false, buttons: [] };
+  // M3 起 AI 会紧急回避（前 10 帧无敌）。KO 探针要验的是「命中 → 回合结束」链路，
+  // 不是 AI 的闪避概率，因此临时把 AI 决策换成中性帧，结束后原样恢复。
+  const decide = m.ai.decide;
+  m.ai.decide = () => EMPTY;
   m.hitstop = 0;
   m.buffered.length = 0;
   m.p2.hp = 1;
+  m.p2.invuln = 0;
+  m.p2.evadeTimer = 0;
   let steps = 0;
   while (m.phase === 'fight' && steps < 120) {
     // 每帧强制归位，排除上一轮连打残留的硬直/滞空/防御与 AI 干扰；
@@ -460,6 +469,7 @@ const koResult = await page.evaluate(() => {
     m.step(EMPTY);
     steps++;
   }
+  m.ai.decide = decide;
   return { phase: m.phase, p2hp: m.p2.hp, wins: m.p1.wins, steps };
 });
 check('KO 结束回合并记胜场',
@@ -637,22 +647,42 @@ const mirror = await page.evaluate(async () => {
       headZ: idle.headFront[2],
     };
   };
-  const defs = [
-    ['LP', 'LP', 3, {}], ['HP', 'HP', 7, {}], ['LK', 'LK', 4, {}],
-    ['HK', 'HK', 9, {}], ['SWEEP', 'SWEEP', 8, {}],
-    ['JLP', 'JLP', 3, { airborne: true, y: 0.26 }],
-    ['JHK', 'JHK', 5, { airborne: true, y: 0.26 }],
-    ['SUPER', 'SUPER', 10, {}],
-  ];
+  // 角色动作风格会让两人关节角不同；验证「几何镜像」必须临时冻结成中性风格，
+  // 否则测到的是风格差异（约 0.25 世界单位），而不是 root.scale.x 的对称性。
+  k.setMotionOverride('none');
+  const defs = k.baseMoves.map((id) => {
+    const m = k.moves[id];
+    return { id, frame: m.startup, opts: m.air ? { airborne: true, y: 0.26 } : {} };
+  });
   const rows = [];
-  for (const [name, id, frame, opts] of defs) {
-    rows.push({ name, p1: await sample(0, id, frame, opts), p2: await sample(1, id, frame, opts) });
+  for (const d of defs) {
+    rows.push({ name: d.id,
+      p1: await sample(0, d.id, d.frame, d.opts), p2: await sample(1, d.id, d.frame, d.opts) });
+  }
+  // 新增招式逐个摆拍：按 pose 类别取主攻肢体，给通用伸展下限，不写死每个 id。
+  const extraIds = Object.keys(k.moves).filter((id) => !k.baseMoves.includes(id));
+  const extraRows = [];
+  k.setPose('idle', null, 0); await settle(0);
+  for (const id of extraIds) {
+    const m = k.moves[id];
+    k.setPose('attack', id, m.startup, m.air ? { airborne: true, y: 0.26 } : {});
+    for (let i = 0; i < 8; i++) await wait();
+    const limb = k.limbs(0);
+    const part = ['kickL', 'kickH', 'sweep', 'jumpKick'].includes(m.pose) ? 'footR' : 'fistR';
+    extraRows.push({ name: id, pose: m.pose, part,
+      v: Math.abs(limb[part][0] - k.match.p1.x) });
   }
   await wait();
   const scale = k.snapshot().viewScale;
   const superBox = { ...k.moves.SUPER.hitbox };
+  // 四段关键帧标签按整张招式表生成：以后加招，断言条数随之增长而脚本无需改。
+  const moveMeta = Object.fromEntries(Object.keys(k.moves).map((id) => [id, {
+    tags: k.sampleAttackTags(id), x: k.moves[id].hitbox.x, pose: k.moves[id].pose,
+  }]));
+  k.setMotionOverride(null);
   k.clearPose();
-  return { rows, scale, superBox };
+  return { rows, extraRows, moveMeta, scale, superBox,
+    moveCount: Object.keys(k.moves).length, baseCount: k.baseMoves.length };
 });
 const mHP = mirror.rows.find((r) => r.name === 'HP');
 const mHK = mirror.rows.find((r) => r.name === 'HK');
@@ -664,7 +694,7 @@ const worstPair = Math.max(...mirror.rows.flatMap((r) => [
   Math.abs(r.p1.fist + r.p2.fist), Math.abs(r.p1.foot + r.p2.foot),
   Math.abs(r.p1.fistZ - r.p2.fistZ), Math.abs(r.p1.footZ - r.p2.footZ),
 ]));
-check('双方 8 招主攻末端严格镜像对称（含朝镜头深度）', worstPair < 0.05,
+check(`双方 ${mirror.baseCount} 招主攻末端严格镜像对称（含朝镜头深度）`, worstPair < 0.05,
   `最大不对称=${worstPair.toFixed(4)} 世界单位`);
 const headMin = Math.min(...mirror.rows.flatMap((r) => [r.p1.headZ, r.p2.headZ]));
 check('负缩放未把两人转成侧脸（头部正面仍朝镜头）', headMin > 0.90,
@@ -673,23 +703,37 @@ check('镜像契约：root.scale.x 与 facing 一致',
   mirror.scale[0] === 1 && mirror.scale[1] === -1,
   `viewScale=[${mirror.scale.join(', ')}]`);
 
-// 8 招伸展下限：把审查里的幅度表固化成契约，防止姿态表再被调回「微幅」。
+// 基础招式伸展下限冻结（把审查里的幅度表固化成契约）；新增招式按 pose 类别给
+// 通用下限，不再手写每个 id 的清单，也不会因漏配 key 抛 TypeError 中断自检。
 // 用末端相对角色中心的绝对坐标（含超必杀前冲），而不是相对 idle 的增量——
 // 待机呼吸相位不同会给增量带来约 0.15 的采样噪声。
-const REACH_MIN = {
+const BASE_REACH = {
   LP: { part: 'fist', min: 0.66 }, HP: { part: 'fist', min: 0.66 },
   JLP: { part: 'fist', min: 0.64 }, SUPER: { part: 'fist', min: 0.72 },
   LK: { part: 'foot', min: 0.84 }, HK: { part: 'foot', min: 1.02 },
   SWEEP: { part: 'foot', min: 0.60 }, JHK: { part: 'foot', min: 1.00 },
 };
+const EXTRA_REACH = { fist: 0.30, foot: 0.45 };
 const reachRows = mirror.rows.map((r) => {
-  const spec = REACH_MIN[r.name];
+  const spec = BASE_REACH[r.name];
   const v = Math.abs(r.p1[spec.part]);
   return { name: r.name, v, min: spec.min, ok: v >= spec.min };
 });
-check('8 个招式主攻末端伸展量全部达标（姿态表下限契约）',
+const extraRows = mirror.extraRows.map((r) => {
+  const min = EXTRA_REACH[r.part === 'footR' ? 'foot' : 'fist'];
+  return { name: r.name, v: r.v, min, ok: r.v >= min };
+});
+check(`${mirror.baseCount} 个基础招式主攻末端伸展量全部达标（下限冻结）`,
   reachRows.every((r) => r.ok),
   reachRows.map((r) => `${r.name} ${r.v.toFixed(2)}≥${r.min}`).join('  '));
+check(`${extraRows.length} 个新增招式主攻肢体确实朝前伸出（按 pose 类别的下限）`,
+  extraRows.length > 0 && extraRows.every((r) => r.ok),
+  extraRows.map((r) => `${r.name} ${r.v.toFixed(2)}≥${r.min}`).join('  '));
+check('全部招式都有四段关键帧与前向判定框（断言随招式表自动增长）',
+  mirror.moveCount >= 20 && Object.values(mirror.moveMeta).every((m) =>
+    ['windup', 'strike', 'follow', 'recovery'].every((s) => stages(m.tags).includes(s)) &&
+    m.x > 0),
+  `招式数=${mirror.moveCount}, 姿态类别=${new Set(Object.values(mirror.moveMeta).map((m) => m.pose)).size}`);
 const superFist = mirror.rows.find((r) => r.name === 'SUPER').p1.fist;
 const hpFist = mirror.rows.find((r) => r.name === 'HP').p1.fist;
 check('超必杀前冲让拳头落进判定框中心，且明显长于重拳',
@@ -802,17 +846,38 @@ check('判定框调试线框开关可用',
   JSON.stringify(debugProbe));
 
 // ── 动作关键帧拼图：独立页面冻结逻辑逐格摆拍，供人工核对动作质量 ──────────
+// 清单从运行时的招式表派生：基础招式全拍，新增招式按姿态类别各取一代表，
+// 两名角色的超必杀各占一格。以后加招不会漏拍，也不必再同步改这里。
+const moveTable = await page.evaluate(() => ({
+  base: [...window.__kof.baseMoves],
+  moves: Object.fromEntries(Object.entries(window.__kof.moves).map(([id, m]) =>
+    [id, { startup: m.startup, air: m.air === true, pose: m.pose, command: m.command ?? null }])),
+}));
+const moveTile = (id) => ({
+  slug: id.toLowerCase(), state: 'attack', move: id, frame: moveTable.moves[id].startup,
+  opts: moveTable.moves[id].air ? { airborne: true, y: 0.26 } : {},
+});
+const extraIds = Object.keys(moveTable.moves).filter((id) => !moveTable.base.includes(id));
+const poseFirst = new Map();
+for (const id of extraIds) {
+  const p = moveTable.moves[id].pose;
+  if (!poseFirst.has(p)) poseFirst.set(p, id);
+}
+const superIds = extraIds.filter((id) => moveTable.moves[id].command === '236236');
+const signature = [...new Set([...poseFirst.values(), ...superIds])];
 const poseDefs = [
   { slug: '1-idle', state: 'idle', frame: 0 },
-  { slug: '2-lp-windup', state: 'attack', move: 'LP', frame: 2 },
-  { slug: '3-hp-strike', state: 'attack', move: 'HP', frame: 7 },
-  { slug: '4-hk-strike', state: 'attack', move: 'HK', frame: 9 },
-  { slug: '5-guard-stand', state: 'guard', frame: 0, opts: { guardLevel: 'stand' } },
-  { slug: '6-guard-crouch', state: 'guard', frame: 0, opts: { guardLevel: 'crouch' } },
-  { slug: '7-jump-kick', state: 'attack', move: 'JHK', frame: 5, opts: { airborne: true, y: 0.26 } },
-  { slug: '8-hitstun', state: 'hitstun', frame: 1 },
-  { slug: '9-sweep', state: 'attack', move: 'SWEEP', frame: 8 },
+  { slug: '2-guard-stand', state: 'guard', frame: 0, opts: { guardLevel: 'stand' } },
+  { slug: '3-guard-crouch', state: 'guard', frame: 0, opts: { guardLevel: 'crouch' } },
+  { slug: '4-hitstun', state: 'hitstun', frame: 1 },
+  ...moveTable.base.map(moveTile),
+  ...signature.map(moveTile),
 ];
+const poseCoverage = new Set(poseDefs.filter((d) => d.move).map((d) => moveTable.moves[d.move].pose));
+const allPoses = new Set(Object.values(moveTable.moves).map((m) => m.pose));
+check('关键帧拼图清单从招式表派生且覆盖全部姿态类别',
+  poseCoverage.size === allPoses.size && poseDefs.length >= moveTable.base.length + 4,
+  `${poseDefs.length} 格 / ${poseCoverage.size} 类姿态 / ${Object.keys(moveTable.moves).length} 招`);
 const sheet = await browser.newPage();
 await sheet.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
 await sheet.goto(`file://${target}`, { waitUntil: 'load' });
@@ -852,7 +917,7 @@ check('角色近景图已生成（用于人工核对几何细节）',
   `${(fs.statSync(detailPath).size / 1024).toFixed(0)} KB`);
 await sheet.close();
 
-// 九格拼图同样改用浏览器 Canvas 合成（3x3 + 标签），零外部图像处理工具。
+// 拼图改用浏览器 Canvas 合成（3 列 × N 行 + 标签），行数随招式表增长，零外部图像处理工具。
 const sheetPath = path.join(shots, '06-poses.png');
 try {
   const montagePage = await browser.newPage();
@@ -860,7 +925,8 @@ try {
   const urls = tiles.map((t) => `data:image/png;base64,${fs.readFileSync(t).toString('base64')}`);
   const labels = poseDefs.map((d) => d.slug);
   const b64 = await montagePage.evaluate(async ({ urls, labels }) => {
-    const W = 470, H = 278, PAD = 8, LABEL = 22, COLS = 3, ROWS = 3;
+    const W = 470, H = 278, PAD = 8, LABEL = 22, COLS = 3;
+    const ROWS = Math.ceil(urls.length / COLS); // 拼图行数随招式表增长
     const canvas = document.createElement('canvas');
     canvas.width = COLS * (W + PAD * 2);
     canvas.height = ROWS * (H + LABEL + PAD * 2);
@@ -889,23 +955,74 @@ try {
   check('动作关键帧拼图已生成', false, String(err.message).slice(0, 160));
 }
 
-// ── M2：236 超必杀的浏览器端闭环（同步喂帧，不依赖 headless 键盘时序） ──────
+// ── M3：指令 / 角色 / 取消图的运行时契约（全部从 window.__kof 派生） ────────
+const systemProbe = await page.evaluate(() => {
+  const k = window.__kof;
+  const chars = k.characters;
+  const moves = k.moves;
+  const ids = Object.keys(moves);
+  const cancels = Object.values(chars).flatMap((c) => Object.values(c.cancels));
+  return {
+    names: k.snapshot().characterNames,
+    charNames: [chars.FEILING.name, chars.YUEZHENG.name],
+    styles: [chars.FEILING.motion.reach, chars.YUEZHENG.motion.reach],
+    commandIds: k.commands.map((c) => c.id),
+    commandSeqs: k.commands.map((c) => c.seq.length),
+    commandMaps: [Object.keys(chars.FEILING.commands), Object.keys(chars.YUEZHENG.commands)],
+    baseCount: k.baseMoves.length,
+    moveCount: ids.length,
+    multiHit: ids.filter((id) => moves[id].hits).length,
+    branches: ids.filter((id) => moves[id].branchInto).length,
+    cancelEdges: cancels.reduce((n, a) => n + a.length, 0),
+    throws: ids.filter((id) => moves[id].unblockable).length,
+    supers: ids.filter((id) => moves[id].command === '236236').length,
+  };
+});
+check('中文角色名与个性化动作风格已进入运行时（HUD / snapshot 同源）',
+  systemProbe.names[0] === systemProbe.charNames[0] &&
+  systemProbe.names[1] === systemProbe.charNames[1] &&
+  /^[\u4e00-\u9fa5]+$/.test(systemProbe.names[0]) &&
+  systemProbe.names[0] !== systemProbe.names[1] &&
+  systemProbe.styles[0] !== systemProbe.styles[1],
+  `角色=${systemProbe.names.join(' vs ')}, reach=${systemProbe.styles.join('/')}`);
+check('指令族 / 招式 / 取消图 / 派生链 / 多 hit 达到量化目标',
+  systemProbe.commandIds.length === 5 &&
+  systemProbe.commandIds.includes('236236') && systemProbe.commandIds.includes('41236') &&
+  systemProbe.moveCount >= 20 && systemProbe.baseCount === 8 &&
+  systemProbe.multiHit >= 3 && systemProbe.branches >= 3 &&
+  systemProbe.cancelEdges >= 8 && systemProbe.throws >= 1 && systemProbe.supers === 2 &&
+  systemProbe.commandMaps[0].join() !== systemProbe.commandMaps[1].join(),
+  `指令=${systemProbe.commandIds.join('/')}, 招式=${systemProbe.moveCount}, ` +
+  `多hit=${systemProbe.multiHit}, 派生=${systemProbe.branches}, ` +
+  `取消=${systemProbe.cancelEdges}, 投技=${systemProbe.throws}`);
+check('两条超杀指令都按长度降序排在普通 236 之前',
+  systemProbe.commandSeqs[0] === 6 && systemProbe.commandIds[0] === '236236',
+  `序列长度=${systemProbe.commandSeqs.join('/')}`);
+
+// ── M3：指令在 Match 层的浏览器端闭环（同步喂帧，不依赖 headless 键盘时序） ──
 const superProbe = await page.evaluate(() => {
   const k = window.__kof;
   const m = k.match;
   const cost = k.config.superCost;
   const EMPTY = { dir: 0, jump: false, down: false, guard: false, buttons: [] };
   const F = (o) => ({ ...EMPTY, ...o });
-  const qcf = (dir) => [
-    F({ down: true }), F({ down: true }),
-    F({ down: true, dir }), F({ down: true, dir }),
-    F({ dir, buttons: ['HP'] }),
-  ];
-  // 每帧强制归位，排除 AI 干扰；inputHistory 清掉此前真实按键留下的方向序列。
+  const char = k.characters.FEILING;
+  const normalId = char.commands['236'];
+  const superId = char.superMove;
+  // 手摇帧从 COMMANDS 表生成，脚本里不写第二份数字方位；facing 决定物理方向。
+  const commandFrames = (id, facing = 1) => {
+    const def = k.commands.find((c) => c.id === id);
+    return def.seq.map((n, i) => F({
+      dir: (n === 6 || n === 3) ? facing : (n === 4 || n === 1) ? -facing : 0,
+      down: n === 1 || n === 2 || n === 3,
+      buttons: i === def.seq.length - 1 ? ['HP'] : [],
+    }));
+  };
+  // 每帧强制归位，排除 AI 干扰；清掉此前真实按键留下的方向序列。
   const ready = (meter) => {
     m.phase = 'fight';
     m.hitstop = 0;
-    m.clearTransient(); // 清 buffered + inputHistory + pendingQcf，与上方注释一致
+    m.clearTransient(); // 清 buffered / inputHistory / notationHistory / pending*
     m.p1.meter = meter;
     for (const f of [m.p1, m.p2]) {
       f.state = 'idle'; f.move = null; f.moveFrame = 0; f.stunLeft = 0;
@@ -927,16 +1044,15 @@ const superProbe = await page.evaluate(() => {
   };
 
   ready(100);
-  const right = feed(qcf(1));
-
+  const right = feed(commandFrames('236'));                 // 普通必杀，不耗 POW
   ready(100);
-  const mirrored = feed(qcf(-1), true); // 换到右半场，facing = -1，必须摇 ↓↙←
-
+  const superRight = feed(commandFrames('236236'));         // 角色专属超杀
   ready(100);
-  const backward = feed(qcf(-1));       // 仍在左半场却向后摇
-
+  const mirrored = feed(commandFrames('236236', -1), true); // 换到右半场，facing = -1
+  ready(100);
+  const backward = feed(commandFrames('236236', -1));       // 仍在左半场却向后摇
   ready(cost - 1);
-  const poor = feed(qcf(1));            // POW 差 1 点
+  const poor = feed(commandFrames('236236'));               // POW 差 1 点，降级普通必杀
 
   ready(100);
   m.step(F({ down: true }));
@@ -951,29 +1067,35 @@ const superProbe = await page.evaluate(() => {
   const expired = { move: m.p1.move?.id ?? null, meter: m.p1.meter };
 
   return {
-    cost, window: k.config.qcfWindow, frame: k.moves.SUPER,
-    tags: k.sampleAttackTags('SUPER'),
-    right, mirrored, backward, poor, expired,
+    cost, window: k.config.qcfWindow, normalId, superId,
+    frame: k.moves[superId], tags: k.sampleAttackTags(superId),
+    right, superRight, mirrored, backward, poor, expired,
   };
 });
 
-check('236 超必杀：帧表就位且四段动作齐全',
-  superProbe.frame.id === 'SUPER' && superProbe.frame.damage > 20 &&
-  superProbe.frame.meterGain === 0 &&
+check('角色超必杀帧表就位：消费半槽、多 hit、四段动作齐全',
+  superProbe.frame.id === superProbe.superId &&
+  superProbe.frame.cost === superProbe.cost &&
+  superProbe.frame.command === '236236' &&
+  superProbe.frame.meterGain === 0 && superProbe.frame.hits.length >= 2 &&
   ['windup', 'strike', 'follow', 'recovery'].every((s) => stages(superProbe.tags).includes(s)),
-  `dmg=${superProbe.frame.damage}, 分段=${stages(superProbe.tags).join('→')}`);
-check('236 超必杀：朝向对手摇杆扣半槽并起 SUPER',
-  superProbe.right.facing === 1 && superProbe.right.move === 'SUPER' &&
-  superProbe.right.meter === 100 - superProbe.cost,
+  `id=${superProbe.frame.id}, 分段=${stages(superProbe.tags).join('→')}, hits=${superProbe.frame.hits.length}`);
+check('236 摇杆起角色普通必杀且不消费 POW',
+  superProbe.right.facing === 1 && superProbe.right.move === superProbe.normalId &&
+  superProbe.right.meter === 100,
   JSON.stringify(superProbe.right));
-check('236 超必杀：镜像站位需反向摇杆（绝对方向与 facing 比对）',
-  superProbe.mirrored.facing === -1 && superProbe.mirrored.move === 'SUPER' &&
+check('236236 摇杆扣半槽起角色专属超杀',
+  superProbe.superRight.facing === 1 && superProbe.superRight.move === superProbe.superId &&
+  superProbe.superRight.meter === 100 - superProbe.cost,
+  JSON.stringify(superProbe.superRight));
+check('镜像站位需反向摇杆（相对 facing 的数字方位）',
+  superProbe.mirrored.facing === -1 && superProbe.mirrored.move === superProbe.superId &&
   superProbe.mirrored.meter === 100 - superProbe.cost,
   JSON.stringify(superProbe.mirrored));
-check('236 超必杀：背向摇杆 / POW 不足 / 窗口过期都回退普通招且不扣槽',
-  superProbe.backward.move === 'HP' && superProbe.backward.meter === 100 &&
-  superProbe.poor.move === 'HP' && superProbe.poor.meter === superProbe.cost - 1 &&
-  superProbe.expired.move === 'HP' && superProbe.expired.meter === 100,
+check('背向摇杆 / POW 不足 / 窗口过期都回退且不扣超杀槽',
+  superProbe.backward.move !== superProbe.superId && superProbe.backward.meter === 100 &&
+  superProbe.poor.move === superProbe.normalId && superProbe.poor.meter === superProbe.cost - 1 &&
+  superProbe.expired.move !== superProbe.superId && superProbe.expired.meter === 100,
   `背向=${superProbe.backward.move}/${superProbe.backward.meter}, ` +
   `不足=${superProbe.poor.move}/${superProbe.poor.meter}, ` +
   `过期=${superProbe.expired.move}/${superProbe.expired.meter}`);
@@ -987,7 +1109,8 @@ const superImpact = await page.evaluate(() => new Promise((resolve) => {
     const s = window.__kof.snapshot();
     const alert = document.getElementById('alert');
     resolve({
-      move: s.p1.move, tag: s.anim[0].tag, fx: s.fx, zoom: s.camera.zoom,
+      move: s.p1.move, superMove: window.__kof.characters.FEILING.superMove,
+      tag: s.anim[0].tag, fx: s.fx, zoom: s.camera.zoom,
       alert: alert?.textContent ?? '', alertClass: alert?.className ?? '',
       flash: document.getElementById('screen-flash')?.className ?? '',
     });
@@ -995,8 +1118,8 @@ const superImpact = await page.evaluate(() => new Promise((resolve) => {
 }));
 const superShot = path.join(shots, '09-super.png');
 await page.screenshot({ path: superShot });
-check('超必杀发力帧姿态到位（strike:SUPER）',
-  superImpact.move === 'SUPER' && superImpact.tag.startsWith('strike:'),
+check('角色超必杀发力帧姿态到位（strike:<角色超杀>）',
+  superImpact.move === superImpact.superMove && superImpact.tag.startsWith('strike:'),
   `${superImpact.move} / ${superImpact.tag}`);
 check('超必杀专属演出：五类特效 + 酸绿提示 + 中闪 + 命中推镜',
   ['sparks', 'lines', 'glows', 'arcs', 'ghosts'].every((k) => superImpact.fx.counts[k] > 0) &&
@@ -1010,16 +1133,16 @@ await page.evaluate(() => window.__kof.clearPose());
 
 // ── 触屏虚拟键 / Gamepad：真实 DOM 事件 + 轮询设备模拟 ────────────────────
 // 每个用例前把对局推回干净状态：p2 推远、清硬直、满槽，避免 AI 干扰判定。
-const armInputTest = () => page.evaluate(() => {
+const armInputTest = (meter = 100) => page.evaluate((m0) => {
   const m = window.__kof.match;
   m.phase = 'fight'; m.hitstop = 0; m.buffered.length = 0;
   const a = m.p1, b = m.p2;
   a.state = 'idle'; a.move = null; a.moveFrame = 0; a.stateFrame = 0;
   a.stunLeft = 0; a.landingStun = 0; a.airborne = false; a.y = 0; a.vy = 0; a.vx = 0;
   a.guarding = false; a.guardLevel = null; a.crouching = false;
-  a.x = -1.5; a.meter = 100;
+  a.x = -1.5; a.meter = m0;
   b.x = 3.2; b.state = 'idle'; b.move = null; b.vx = 0; b.stunLeft = 0;
-});
+}, meter);
 
 const touchUi = await page.evaluate(() => {
   const k = window.__kof;
@@ -1091,19 +1214,39 @@ check('触屏攻击键端到端出招（输入层 → 帧表 → 角色状态）
   atkHeld.includes('LP') && atkSeen,
   `held=[${atkHeld.join(',')}], 起招=${atkSeen}`);
 
-await armInputTest();
+const macroIds = await page.evaluate(() => ({
+  normal: window.__kof.characters.FEILING.commands['236'],
+  super: window.__kof.characters.FEILING.superMove,
+  cost: window.__kof.config.superCost,
+}));
 const macroPoint = await page.evaluate(() => {
   const r = document.querySelector('#touch-controls [data-macro="qcf"]').getBoundingClientRect();
   return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
 });
+await armInputTest(100);
 await page.mouse.click(macroPoint.x, macroPoint.y);
 const macroFired = await page.waitForFunction(
-  'window.__kof.snapshot().p1.move === "SUPER"', { timeout: 4000 },
+  (id) => window.__kof.snapshot().p1.move === id,
+  { timeout: 4000 }, macroIds.super,
 ).then(() => true).catch(() => false);
 const macroSnap = await snap();
-check('触屏一键 236 走同一判定链路：扣 50 POW 并起 SUPER',
-  macroFired && macroSnap.p1.move === 'SUPER' && macroSnap.p1.meter === 50,
+check('触屏一键指令：POW 满半槽升级超杀，扣 50 POW',
+  macroFired && macroSnap.p1.move === macroIds.super &&
+  macroSnap.p1.meter === 100 - macroIds.cost,
   `move=${macroSnap.p1.move}, meter=${macroSnap.p1.meter}`);
+
+// 同一个按钮在 POW 不足时只摇 236 普通必杀，不能凭空扣出超杀。
+await page.evaluate(() => window.__kof.clearPose());
+await armInputTest(0);
+await page.mouse.click(macroPoint.x, macroPoint.y);
+const lowFired = await page.waitForFunction(
+  (id) => window.__kof.snapshot().p1.move === id,
+  { timeout: 4000 }, macroIds.normal,
+).then(() => true).catch(() => false);
+const lowSnap = await snap();
+check('一键指令 POW 不足时降级为普通必杀且不扣槽',
+  lowFired && lowSnap.p1.move === macroIds.normal && lowSnap.p1.meter === 0,
+  `move=${lowSnap.p1.move}, meter=${lowSnap.p1.meter}`);
 const touchShot = path.join(shots, '10-touch-ui.png');
 await page.screenshot({ path: touchShot });
 check('触屏 UI 截图已生成', fs.existsSync(touchShot) && fs.statSync(touchShot).size > 10000,
@@ -1150,6 +1293,7 @@ check('手柄断开立即收回角色并清空提示（不残留方向）',
 await armInputTest();
 const padMacro = await page.evaluate(async () => {
   const k = window.__kof;
+  const superId = k.characters.FEILING.superMove;
   const wait = () => new Promise((r) => requestAnimationFrame(r));
   const fake = {
     connected: true, axes: [0, 0],
@@ -1162,10 +1306,10 @@ const padMacro = await page.evaluate(async () => {
   const first = { move: k.snapshot().p1.move, meter: k.match.p1.meter };
   navigator.getGamepads = () => [];
   for (let i = 0; i < 3; i++) await wait();
-  return { first, final: { move: k.snapshot().p1.move, meter: k.match.p1.meter } };
+  return { superId, first, final: { move: k.snapshot().p1.move, meter: k.match.p1.meter } };
 });
-check('手柄 RB 一键 236：边缘触发，按住不重复扣槽',
-  padMacro.first.move === 'SUPER' && padMacro.first.meter === 50 &&
+check('手柄 RB 一键指令：边缘触发，按住不重复扣槽',
+  padMacro.first.move === padMacro.superId && padMacro.first.meter === 50 &&
   padMacro.final.meter === 50,
   `after=${JSON.stringify(padMacro.first)}, final=${JSON.stringify(padMacro.final)}`);
 await page.evaluate(() => window.__kof.controls.setTouchVisible(null));
@@ -1414,7 +1558,9 @@ const report = {
   attackTags, airTags, idleDeltas, frameTags, difficultyProbe, debugProbe,
   fistGain, footGain, airFootGain, guardGap,
   impactProbe, recoil, dustBefore, dustAfter, freeze, koShot, koDom, resetShot,
-  superProbe, superImpact,
+  superProbe, superImpact, systemProbe, macroIds,
+  mirrorRows: mirror.rows.length, extraReach: extraRows, moveCount: mirror.moveCount,
+  poseTiles: poseDefs.map((d) => d.slug), poseCoverage: [...poseCoverage],
   touchUi, touchShot, padProbe, padMacro, mobileBoot, mobileProbe, mobileShot,
   shellDesktop, mobileShell, tapPoint, dblTap,
   portraitBoot, portraitHalf, portraitExtreme, portraitLeft, portraitRight,

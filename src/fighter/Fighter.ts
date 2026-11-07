@@ -1,9 +1,12 @@
 import {
-  AIR_BUTTON_MOVE, BACK_SPEED, BUTTON_MOVE, GRAVITY, GROUND_FRICTION,
+  BACK_SPEED, BUTTON_MOVE, GRAVITY, GROUND_FRICTION,
+  GUARD_CRUSH_LIMIT, EVADE_FRAMES, EVADE_INVULN, EVADE_SPEED,
   HURT_AIR, HURT_CROUCH, HURT_STAND, JUMP_VX, JUMP_VY,
-  LANDING_STUN, MAX_HP, MAX_METER, MOVES, SUPER_COST, WALK_SPEED, moveDuration,
-  type HitLevel, type MoveDef, type MoveId,
+  LANDING_STUN, MAX_DAMAGE_SCALE, MAX_DURATION, MAX_COST, MAX_HP, MAX_METER,
+  MOVES, SUPER_COST, WALK_SPEED, moveDuration,
+  type Box, type HitLevel, type MoveDef, type MoveId,
 } from '../core/frames';
+import { LEGACY_CHAR, type CharacterDef } from '../core/characters';
 import type { InputFrame } from '../core/input';
 import { clampArena, worldBox, type WorldBox } from '../core/hitbox';
 import { isStunned, type FighterState } from '../core/state';
@@ -11,9 +14,10 @@ import { isStunned, type FighterState } from '../core/state';
 export interface HitEvent {
   attacker: Fighter;
   defender: Fighter;
+  /** 多段招式传入的是「当前段覆盖过伤害/顿帧」的 MoveDef，id 仍是原招式。 */
   move: MoveDef;
   blocked: boolean;
-  /** 摆了防御姿势但高度选错（下段没蹲防 / 上段没站防）。 */
+  /** 摆了防御姿势但高度选错 / 投技不可防 / 防御崩溃。 */
   guardBreak: boolean;
   x: number;
   y: number;
@@ -32,6 +36,10 @@ export function blockMatches(guard: GuardLevel, level: HitLevel): boolean {
 export class Fighter {
   readonly id: 0 | 1;
   readonly name: string;
+  /** 角色定义：中文名、按键表、指令表、取消图与动作风格都从这里取。 */
+  readonly char: CharacterDef;
+  /** 对手引用，仅供近身技（指令投）做距离判定；纯逻辑单测可不设。 */
+  foe: Fighter | null = null;
 
   x: number;
   y = 0;
@@ -49,6 +57,8 @@ export class Fighter {
   /** 每次起招递增，配合 hasHit 保证一次出招只结算一次。 */
   hitId = 0;
   hasHit = false;
+  /** 多段招式已结算的段号（HitWindow.frame），防止同一段重复命中。 */
+  readonly hitFrames = new Set<number>();
 
   guarding = false;
   /** 防御高度：站防挡 mid/overhead，蹲防挡 mid/low；状态仍复用 'guard'。 */
@@ -63,10 +73,29 @@ export class Fighter {
   comboTimer = 0;
   walkPhase = 0;
 
-  constructor(id: 0 | 1, name: string, x: number) {
+  /** M3：MAX 爆气剩余帧、紧急回避剩余帧、无敌帧、连续格挡压力。 */
+  maxTimer = 0;
+  evadeTimer = 0;
+  invuln = 0;
+  guardStress = 0;
+
+  /**
+   * 兼容旧签名 `new Fighter(0, 'RIN', x)`：传字符串时用中性角色定义，
+   * 行为与 M2 完全一致（commands/specials 为空、superMove = 'SUPER'）。
+   */
+  constructor(id: 0 | 1, char: CharacterDef | string, x: number) {
     this.id = id;
-    this.name = name;
+    this.char = typeof char === 'string' ? LEGACY_CHAR : char;
+    this.name = typeof char === 'string' ? char : char.name;
     this.x = x;
+  }
+
+  get damageScale(): number {
+    return this.maxTimer > 0 ? MAX_DAMAGE_SCALE : 1;
+  }
+
+  get isMax(): boolean {
+    return this.maxTimer > 0;
   }
 
   resetForRound(x: number, facing: 1 | -1): void {
@@ -82,6 +111,7 @@ export class Fighter {
     this.move = null;
     this.moveFrame = 0;
     this.hasHit = false;
+    this.hitFrames.clear();
     this.guarding = false;
     this.guardLevel = null;
     this.crouching = false;
@@ -92,6 +122,10 @@ export class Fighter {
     this.combo = 0;
     this.comboTimer = 0;
     this.walkPhase = 0;
+    this.maxTimer = 0;
+    this.evadeTimer = 0;
+    this.invuln = 0;
+    this.guardStress = 0;
   }
 
   hurtbox(): WorldBox {
@@ -99,17 +133,54 @@ export class Fighter {
     return worldBox(box, this.x, this.y, this.facing);
   }
 
+  /**
+   * 本帧实际生效的判定。多段招式按 HitWindow.frame 逐段产出，并把伤害/
+   * 顿帧/硬直覆盖到一份新的 MoveDef 上（id 不变，HUD 演出仍认得原招式）。
+   * hitIndex = -1 表示单段招式，沿用 hasHit 做「一次出招只结算一次」。
+   */
+  currentHit(): { move: MoveDef; box: Box; hitIndex: number } | null {
+    if (this.state !== 'attack' || !this.move) return null;
+    const m = this.move;
+    const f = this.moveFrame;
+    if (m.hits) {
+      for (const h of m.hits) {
+        if (h.frame !== f || this.hitFrames.has(h.frame)) continue;
+        return {
+          move: {
+            ...m,
+            damage: h.damage,
+            hitstop: h.hitstop ?? m.hitstop,
+            hitstun: h.hitstun ?? m.hitstun,
+            knockdown: h.knockdown ?? m.knockdown,
+            meterGain: m.meterGain / m.hits.length,
+          },
+          box: h.box,
+          hitIndex: h.frame,
+        };
+      }
+      return null;
+    }
+    if (this.hasHit || f < m.startup || f >= m.startup + m.active) return null;
+    return { move: m, box: m.hitbox, hitIndex: -1 };
+  }
+
   /** 仅 attack 状态的 active 窗口生成判定框；命中后立即失效。 */
   activeHitbox(): WorldBox | null {
-    if (this.state !== 'attack' || !this.move || this.hasHit) return null;
-    const f = this.moveFrame;
-    if (f < this.move.startup || f >= this.move.startup + this.move.active) return null;
-    return worldBox(this.move.hitbox, this.x, this.y, this.facing);
+    const hit = this.currentHit();
+    return hit ? worldBox(hit.box, this.x, this.y, this.facing) : null;
+  }
+
+  /** 由 Match 在结算后调用：多段只标记本段，不阻断后续段。 */
+  markHit(index: number): void {
+    if (index >= 0) this.hitFrames.add(index);
+    this.hasHit = true;
   }
 
   update(input: InputFrame): void {
     this.stateFrame++;
     if (this.flash > 0) this.flash--;
+    if (this.maxTimer > 0) this.maxTimer--;
+    if (this.invuln > 0) this.invuln--;
     if (this.comboTimer > 0) {
       this.comboTimer--;
       if (this.comboTimer === 0) this.combo = 0;
@@ -138,6 +209,31 @@ export class Fighter {
   }
 
   private neutral(input: InputFrame): void {
+    // MAX 爆气：同一帧按下 LP + HP，消耗半槽、8 秒内攻击力 1.5 倍。
+    if (input.max && !this.airborne && this.maxTimer === 0 && this.meter >= MAX_COST) {
+      this.meter -= MAX_COST;
+      this.maxTimer = MAX_DURATION;
+      this.state = 'idle';
+      this.stateFrame = 0;
+      return;
+    }
+    // 紧急回避：后方向 + LP + HK 同按，前 10 帧无敌。
+    if (input.evade && !this.airborne && this.evadeTimer === 0 &&
+        input.dir !== 0 && input.dir === -this.facing) {
+      this.evadeTimer = EVADE_FRAMES;
+      this.invuln = EVADE_INVULN;
+      this.vx = -this.facing * EVADE_SPEED * 3;
+      this.state = 'walk';
+      this.stateFrame = 0;
+      return;
+    }
+    if (this.evadeTimer > 0) {
+      this.evadeTimer--;
+      this.state = 'walk';
+      this.walkPhase += 0.5;
+      return;
+    }
+
     this.guarding = false;
     this.guardLevel = null;
     this.crouching = false;
@@ -154,8 +250,10 @@ export class Fighter {
 
     if (input.jump) {
       this.airborne = true;
-      this.vy = JUMP_VY;
-      this.vx = input.dir * JUMP_VX;
+      // 前跳更高更远，原地跳更短：用同一套输入做出小/大跳的差别。
+      const long = input.dir === this.facing;
+      this.vy = JUMP_VY * (long ? 1.16 : 0.86);
+      this.vx = input.dir * JUMP_VX * (long ? 1.25 : 0.85);
       this.state = 'jump';
       this.stateFrame = 0;
       return;
@@ -198,29 +296,61 @@ export class Fighter {
     this.state = 'idle';
   }
 
+  /** 起招资格：角色归属、空地限制、POW 消耗、近身距离。 */
+  private canStart(m: MoveDef): boolean {
+    if (m.owner && m.owner !== this.char.id) return false;
+    if (this.airborne !== (m.air === true)) return false;
+    if ((m.cost ?? 0) > this.meter) return false;
+    if (m.closeRange !== undefined && this.foe &&
+        Math.abs(this.foe.x - this.x) > m.closeRange) return false;
+    return true;
+  }
+
   private tryStartMove(input: InputFrame): void {
-    // M2 超必杀：236 必须朝向对手、站在地面、POW 足额。
-    // 任一条件不满足就回退到普通招式——按键绝不吞掉，POW 也一分不扣。
-    if (input.qcf === this.facing && !this.airborne && this.meter >= SUPER_COST) {
-      this.meter -= SUPER_COST;
-      this.startMove('SUPER');
+    // 1) 通用指令：COMMANDS 已按长度降序，超杀优先于普通必杀。
+    for (const cmd of input.commands ?? []) {
+      const id = this.char.commands[cmd];
+      if (!id) continue;
+      if (!this.canStart(MOVES[id])) continue;
+      this.startMove(id);
       return;
     }
-    let id: MoveId = BUTTON_MOVE[input.buttons[0]];
-    if (this.airborne) {
-      // 空中只允许空中招式，避免落地后仍在挥地面判定框
-      id = AIR_BUTTON_MOVE[input.buttons[0]];
-    } else if (input.down && (id === 'LK' || id === 'HK')) {
-      // 蹲姿 + 踢 → 下段扫腿，让 SWEEP 有稳定的触发方式
-      id = 'SWEEP';
+
+    // 2) 旧 236 兼容链路：AI 显式 qcf、触屏一键宏、纯逻辑单测都走这里。
+    const legacyId = this.char.superMove;
+    const legacyMove = MOVES[legacyId];
+    if (input.qcf === this.facing && !this.airborne &&
+        this.meter >= (legacyMove.cost ?? SUPER_COST) && this.canStart(legacyMove)) {
+      this.startMove(legacyId);
+      return;
     }
+
+    // 3) 特殊技：把方向归约成相对 facing 的数字方位（6 前 / 3 下前 / 4 后 / 1 下后）。
+    const rel = input.dir === 0 ? 5 : (input.dir === this.facing ? 6 : 4);
+    const notation = input.down ? (rel === 6 ? 3 : rel === 4 ? 1 : 2) : rel;
+    for (const b of input.buttons) {
+      for (const sp of this.char.specials) {
+        if (sp.button !== b || sp.dir !== notation) continue;
+        if (!this.canStart(MOVES[sp.move])) continue;
+        this.startMove(sp.move);
+        return;
+      }
+    }
+
+    // 4) 普通按键（含空中映射与蹲 + 踢 → 扫腿）。
+    const b = input.buttons[0];
+    let id: MoveId = this.airborne ? this.char.airButtons[b] : this.char.buttons[b];
+    if (!this.airborne && input.down && (id === 'LK' || id === 'HK')) id = 'SWEEP';
     this.startMove(id);
   }
 
   startMove(id: MoveId): void {
-    this.move = MOVES[id];
+    const m = MOVES[id];
+    this.meter = Math.max(0, this.meter - (m.cost ?? 0));
+    this.move = m;
     this.moveFrame = 0;
     this.hasHit = false;
+    this.hitFrames.clear();
     this.hitId++;
     this.state = 'attack';
     this.stateFrame = 0;
@@ -234,14 +364,37 @@ export class Fighter {
     const m = this.move;
     if (!m) return;
 
-    // 命中后的取消窗口：轻拳可取消为重拳/重踢
-    if (this.hasHit && this.moveFrame >= m.startup && input.buttons.length > 0) {
+    // 派生「追加输入」：窗口内按指定键切到后续招式，不要求命中，
+    // 对应 KOF 的荒咬→九伤→八锖、岚之山→续·切株返这类多拍结构。
+    if (m.branchInto) {
+      const [lo, hi] = m.branchWindow ?? [m.startup, moveDuration(m)];
+      if (this.moveFrame >= lo && this.moveFrame < hi) {
+        for (const b of input.buttons) {
+          const next = m.branchInto[b];
+          if (next) {
+            this.startMove(next);
+            return;
+          }
+        }
+      }
+    }
+
+    // 取消图：指令取消优先（通常技 → 必杀 / 超杀），其次按键取消。
+    const cancels = this.char.cancels[m.id] ?? m.cancelInto;
+    if (cancels.length > 0 && this.hasHit && this.moveFrame >= m.startup) {
+      for (const cmd of input.commands ?? []) {
+        const id = this.char.commands[cmd];
+        if (!id || !cancels.includes(id)) continue;
+        if (!this.canStart(MOVES[id])) continue;
+        this.startMove(id);
+        return;
+      }
       for (const b of input.buttons) {
         const next = BUTTON_MOVE[b];
-        if (m.cancelInto.includes(next)) {
-          this.startMove(next);
-          return;
-        }
+        if (!cancels.includes(next)) continue;
+        if (!this.canStart(MOVES[next])) continue;
+        this.startMove(next);
+        return;
       }
     }
 
@@ -292,12 +445,17 @@ export class Fighter {
 
   receiveHit(m: MoveDef, attacker: Fighter, hitX: number, hitY: number): HitEvent {
     const inGuard = this.guarding && !this.airborne && this.state !== 'attack';
-    const blocked = inGuard && blockMatches(this.guardLevel, m.level);
+    // 防御破坏：连续挡满 GUARD_CRUSH_LIMIT 次后强制破防；投技永远不可防。
+    const crushed = inGuard && this.guardStress >= GUARD_CRUSH_LIMIT;
+    const blocked = inGuard && !crushed && !m.unblockable && blockMatches(this.guardLevel, m.level);
     const guardBreak = inGuard && !blocked;
-    const damage = blocked ? Math.max(1, Math.round(m.damage * 0.12)) : m.damage;
+    const damage = blocked
+      ? Math.max(1, Math.round(m.damage * 0.12))
+      : Math.round(m.damage * attacker.damageScale);
     this.hp = Math.max(0, this.hp - damage);
     this.flash = blocked ? 0 : 6;
     this.vx = attacker.facing * m.pushback;
+    this.guardStress = blocked ? this.guardStress + 1 : 0;
 
     if (this.hp === 0) {
       this.state = 'ko';

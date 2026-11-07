@@ -142,6 +142,16 @@ test('滞空时 normal/hard 会补空中攻击，easy 不会', () => {
   }
 });
 
+test('紧急回避受冷却约束：对手持续出招时无敌帧不会逐帧刷新', () => {
+  const c = new AIController('hard');
+  const self = fake(0, 'idle', { meter: 0, invuln: 0, evadeTimer: 0, isMax: false });
+  const foe = fake(0.5, 'attack', { move: frames.MOVES.HP });
+  let evades = 0;
+  for (let i = 0; i < 200; i++) if (c.decide(self, foe).evade) evades++;
+  assert.ok(evades > 0, 'hard AI 应会用紧急回避');
+  assert.ok(evades <= 6, `200 帧内回避 ${evades} 次，说明退化成逐帧掷骰`);
+});
+
 test('冷却期间持续走位，不再站桩', () => {
   const c = new AIController('normal');
   let moving = 0;
@@ -152,15 +162,17 @@ test('冷却期间持续走位，不再站桩', () => {
   assert.ok(moving / 200 > 0.5, `走位帧占比=${(moving / 2).toFixed(1)}%`);
 });
 
-test('三档难度 60s 对局：站桩占比下降，超必杀与跳攻确实出现', () => {
+test('三档难度 60s 对局：站桩占比下降，超必杀 / 跳攻 / 组合确实出现', () => {
   const cb = {
     onHit() {}, onRoundStart() {}, onRoundEnd() {}, onMatchEnd() {},
     onAnnounce() {}, onReset() {},
   };
+  const isSuper = (id) => id === 'SUPER' || frames.MOVES[id]?.command === '236236';
   for (const diff of ['easy', 'normal', 'hard']) {
     const m = new match.Match(new AIController(diff), cb);
     m.phase = 'fight';
     let idle = 0, supers = 0, air = 0;
+    const moves = new Set();
     const total = 3600;
     for (let i = 0; i < total; i++) {
       m.step(EMPTY);
@@ -171,12 +183,23 @@ test('三档难度 60s 对局：站桩占比下降，超必杀与跳攻确实出
       }
       if (m.p2.state === 'idle') idle++;
       const id = m.p2.move?.id;
-      if (id === 'SUPER') supers++;
+      if (!id) continue;
+      moves.add(id);
+      // 超必杀已从单一 SUPER 扩成各角色专属招，按「236236 指令」而非 id 字面量统计。
+      if (isSuper(id)) supers++;
       if (id === 'JLP' || id === 'JHK') air++;
     }
     assert.ok(idle / total < 0.45,
       `${diff} idle 占比 ${(idle / total * 100).toFixed(1)}%（应 < 45%）`);
     assert.ok(supers > 0, `${diff} 超必杀帧=${supers}`);
-    if (diff !== 'easy') assert.ok(air > 0, `${diff} 跳攻帧=${air}`);
+    assert.ok(moves.size >= 5, `${diff} 出招种类=${moves.size}（应 ≥ 5）`);
+    if (diff !== 'easy') {
+      assert.ok(air > 0, `${diff} 跳攻帧=${air}`);
+      assert.ok(moves.size >= 8, `${diff} 应打出更丰富的组合，实际 ${moves.size} 种`);
+      assert.ok([...moves].some((id) => ['YZ_CRUSH', 'YZ_THROW', 'YZ_RISE',
+        'FL_THOUSAND', 'FL_RISE'].includes(id)), `${diff} 未使用指令必杀`);
+      assert.ok([...moves].some((id) => ['YZ_CRUSH2', 'YZ_QUAKE',
+        'FL_FEATHER', 'FL_SKYFALL'].includes(id)), `${diff} 未打出派生链`);
+    }
   }
 });

@@ -1,4 +1,5 @@
-import { JUMP_VY, MOVES, moveDuration, type MoveId, type PoseKey } from '../core/frames';
+import { JUMP_VY, MOVES, moveDuration, type CharId, type MoveId, type PoseKey } from '../core/frames';
+import { CHARACTERS, type MotionStyle } from '../core/characters';
 import type { Fighter } from './Fighter';
 import type { JointName } from './rig';
 import type { CharacterView, JointAngles, Pose, V3 } from './CharacterView';
@@ -347,6 +348,47 @@ const ATTACKS: Record<PoseKey, { windup: Pose; strike: Pose; follow: Pose }> = {
       hair: [-0.60, 0, 0],
     }, 0.07, 0.34, 1.0, 0.85),
   },
+
+  /** M3 连打：双臂高频交替，主攻 R 臂伸直、副手反拉，剪影不同于单发直拳。 */
+  flurry: {
+    windup: withBase({
+      torso: [-0.10, -0.18, 0], chest: [-0.02, -0.06, 0],
+      shoulderR: [-0.96, 0.10, -0.42], elbowR: [-1.40, 0, 0.06],
+      shoulderL: [-0.92, -0.10, 0.62], elbowL: [-1.30, 0, -0.10],
+    }, 0, -0.04),
+    strike: withBase({
+      torso: [0.14, -0.20, 0], chest: [0.08, -0.06, 0],
+      shoulderR: [-1.02, 0.10, 1.26], elbowR: [0, 0, 0],
+      shoulderL: [-0.98, -0.10, -0.70], elbowL: [-1.10, 0, -0.10],
+      hipL: [-0.06, 0, 0.08],
+    }, 0.02, 0.08, 0.4, 1),
+    follow: withBase({
+      torso: [0.18, -0.16, 0], chest: [0.08, -0.06, 0],
+      shoulderR: [-0.96, 0.10, 1.06], elbowR: [-0.24, 0, 0],
+      shoulderL: [-1.02, -0.10, -0.50], elbowL: [-1.34, 0, -0.10],
+    }, 0.02, 0.10, 0.6, 0.7),
+  },
+
+  /** M3 下砸：全身前压、双臂自头顶砸向地面，用于「裂地」与「岳落」。 */
+  slam: {
+    windup: withBase({
+      torso: [-0.34, -0.24, 0], chest: [-0.12, -0.10, 0], head: [-0.14, 0, 0],
+      shoulderR: [-0.60, 0.14, -0.88], elbowR: [-1.80, 0, 0.10],
+      shoulderL: [-0.66, -0.12, 0.74], elbowL: [-1.70, 0, -0.12],
+      hipL: [-0.20, 0, -0.14], kneeL: [0.44, 0, 0.06],
+    }, -0.08, -0.18, 0.5),
+    strike: withBase({
+      torso: [0.44, -0.20, 0], chest: [0.20, -0.08, 0], head: [0.20, 0, 0],
+      shoulderR: [-1.14, 0.16, 1.30], elbowR: [0, 0, 0],
+      shoulderL: [-1.10, -0.12, -0.58], elbowL: [-1.52, 0, -0.12],
+      hipL: [0.14, 0, 0.20], hipR: [-0.16, 0, -0.18],
+    }, -0.16, 0.30, 0.8, 1),
+    follow: withBase({
+      torso: [0.40, -0.18, 0], chest: [0.18, -0.08, 0], head: [0.16, 0, 0],
+      shoulderR: [-1.06, 0.16, 1.12], elbowR: [-0.26, 0, 0],
+      shoulderL: [-1.08, -0.12, -0.54], elbowL: [-1.50, 0, -0.12],
+    }, -0.12, 0.28, 0.9, 0.8),
+  },
 };
 
 /**
@@ -359,6 +401,47 @@ ATTACKS.super.strike.rootX = 0.22;
 ATTACKS.super.follow.rootX = 0.14;
 ATTACKS.punchH.strike.rootX = 0.05;
 ATTACKS.punchH.follow.rootX = 0.03;
+
+/** 绯翎 / 岳铮共用同一套姿态表，靠这组参数拉开动作气质：轻锐舒展 vs 沉稳前压。 */
+export const NEUTRAL_MOTION: MotionStyle = {
+  reach: 1, lift: 0, lean: 0, rootX: 1, hair: 1,
+};
+
+/**
+ * 镜像契约要求两侧用同一套姿态，自检通过 setMotionOverride('none') 临时冻结风格；
+ * 传 null 恢复「各按各的角色」。这是调试钩子，正常对局永远是 null。
+ */
+let motionOverride: MotionStyle | null = null;
+export function setMotionOverride(id: CharId | 'none' | null): void {
+  motionOverride = id === null ? null : id === 'none' ? NEUTRAL_MOTION : CHARACTERS[id].motion;
+}
+
+function motionFor(f: Fighter): MotionStyle {
+  return motionOverride ?? f.char?.motion ?? NEUTRAL_MOTION;
+}
+
+const STYLE_JOINTS: JointName[] = [
+  'shoulderL', 'elbowL', 'shoulderR', 'elbowR', 'hipL', 'kneeL', 'hipR', 'kneeR',
+];
+
+/**
+ * 只缩放 / 偏移角度，不改骨架层级与长度，因此 skeletonSignature() 恒定：
+ * reach 乘 Z 角（屏幕水平伸展），lift 加 X 角（立体厚度），
+ * lean / rootX / hair 调整体气质。返回新对象，绝不写回 ATTACKS 表。
+ */
+function stylePose(pose: Pose, s: MotionStyle): Pose {
+  if (s.reach === 1 && s.lift === 0 && s.lean === 0 && s.rootX === 1 && s.hair === 1) return pose;
+  const out = clonePose(pose);
+  for (const name of STYLE_JOINTS) {
+    const v = out.j[name];
+    if (!v) continue;
+    out.j[name] = [v[0] + s.lift, v[1], v[2] * s.reach];
+  }
+  out.lean = (out.lean ?? 0) + s.lean;
+  out.rootX = (out.rootX ?? 0) * s.rootX;
+  out.hair = (out.hair ?? 0) * s.hair;
+  return out;
+}
 
 /**
  * 姿态缓冲：复用于最终 displayed 的双缓冲，以及 crouch/guard/落地等分支的中间结果。
@@ -453,7 +536,11 @@ function jumpPose(f: Fighter): { pose: Pose; tag: string } {
 function attackPose(f: Fighter, time: number, entry: Pose): { pose: Pose; tag: string } {
   const m = f.move;
   if (!m) return { pose: idlePose(time, f.id), tag: 'idle' };
-  const { windup, strike, follow } = ATTACKS[m.pose];
+  const s = motionFor(f);
+  const frames = ATTACKS[m.pose];
+  const windup = stylePose(frames.windup, s);
+  const strike = stylePose(frames.strike, s);
+  const follow = stylePose(frames.follow, s);
   const frame = f.moveFrame;
   const idle = idlePose(time, f.id);
   const total = moveDuration(m);
@@ -605,6 +692,12 @@ export class Animator {
         target = s.pose; tag = s.tag; break;
       }
       default: target = idlePose(time, f.id); tag = 'idle';
+    }
+
+    // 紧急回避：低身滑步剪影，配合 Fighter 的 invuln 帧形成可读的闪避动作。
+    if (f.evadeTimer > 0) {
+      target = blend(POSES.crouch, POSES.land, 0.6, this.targetBuf);
+      tag = 'evade';
     }
 
     if (this.landTimer > 0) {

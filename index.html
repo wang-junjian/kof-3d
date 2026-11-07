@@ -9,19 +9,19 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="color-scheme" content="dark" />
-  <title>RIN vs FEI · 3D 格斗垂直切片</title>
+  <title>绯翎 vs 岳铮 · 3D 格斗垂直切片</title>
 </head>
 <body>
   <div id="app">
     <canvas id="stage"></canvas>
     <div id="hud"></div>
     <div id="boot">
-      <div class="boot-title">RIN <span>vs</span> FEI</div>
-      <div class="boot-sub">3D 格斗垂直切片 · M0+M1+M2</div>
+      <div class="boot-title">绯翎 <span>vs</span> 岳铮</div>
+      <div class="boot-sub">3D 格斗垂直切片 · 双人指令格斗 · 绯翎 疾影 / 岳铮 铁山</div>
       <div class="boot-keys">
-        <div class="kb-hint">A D 移动 &nbsp;·&nbsp; W 跳跃 &nbsp;·&nbsp; S 下蹲 &nbsp;·&nbsp; 按住后方向站防 / 后 + S 蹲防 &nbsp;·&nbsp; J 轻拳 &nbsp;·&nbsp; K 重拳 &nbsp;·&nbsp; L 轻踢 &nbsp;·&nbsp; I 重踢 &nbsp;·&nbsp; S + 踢 扫腿 &nbsp;·&nbsp; 空中按攻击键出跳攻 &nbsp;·&nbsp; 1 / 2 / 3 切换难度</div>
-        <div class="kb-hint" style="color:#b6ff5c">236 超必杀：S → S + 前方向 → 前方向 + 攻击键（POW 满 50 才能放，方向必须朝向对手）</div>
-        <div class="dev-hint" style="color:#31b7da">触屏：左下方向键 + 右下四攻击键，「236 必杀」一键起招（满 50 POW）&nbsp;·&nbsp; 手柄：左摇杆 / 十字键 + A B X Y，RB 一键 236</div>
+        <div class="kb-hint">A / D 移动 &nbsp;·&nbsp; W 跳跃 &nbsp;·&nbsp; S 下蹲 &nbsp;·&nbsp; 按住后方向站防 / 后 + S 蹲防 &nbsp;·&nbsp; J 轻拳 &nbsp;·&nbsp; K 重拳 &nbsp;·&nbsp; L 轻踢 &nbsp;·&nbsp; I 重踢 &nbsp;·&nbsp; S + 踢 扫腿 &nbsp;·&nbsp; 空中按攻击键出跳攻 &nbsp;·&nbsp; 1 / 2 / 3 切换难度 &nbsp;·&nbsp; → + K 流光刺 / 铁肩撞 &nbsp;·&nbsp; ↘ + I 燕落 / 踏山（两名角色招式不同）</div>
+        <div class="kb-hint" style="color:#b6ff5c">指令摇法：S → S + 前方向 → 前方向 + 攻击键（方向必须朝向对手） &nbsp;·&nbsp; 236 千羽连 / 214 崩山拳（不耗 POW）&nbsp;·&nbsp; 623 翎升 / 岳起 &nbsp;·&nbsp; 41236 岳落（近身投，仅岳铮） &nbsp;·&nbsp; 236236 超必杀（POW 满 50） &nbsp;·&nbsp; 派生：千羽连 / 崩山拳 命中后按 K / I 追加 &nbsp;·&nbsp; 通常技命中后可取消进必杀 / 超杀 &nbsp;·&nbsp; J + K 同按 爆气（攻击 1.5 倍） &nbsp;·&nbsp; 后 + J + I 紧急回避</div>
+        <div class="dev-hint" style="color:#31b7da">触屏：左下方向键 + 右下四攻击键，「236 必杀/超杀」一键起招，POW 满 50 自动升级成 236236 超必杀 &nbsp;·&nbsp; 手柄：左摇杆 / 十字键 + A B X Y，RB 同一键；其余指令走手摇方向 + 攻击键 &nbsp;·&nbsp; 指令：236 千羽连 / 214 崩山拳、623 翎升 / 岳起、41236 岳落（近身投）、236236 超必杀 &nbsp;·&nbsp; 千羽连 / 崩山拳 命中后按 K / I 派生 &nbsp;·&nbsp; J + K 同按 爆气（攻击 1.5 倍） &nbsp;·&nbsp; 后 + J + I 紧急回避 &nbsp;·&nbsp; 两名角色招式不同</div>
       </div>
       <div class="boot-go" id="boot-go">点击、触屏或按任意键开始</div>
     </div>

@@ -466,6 +466,70 @@ export function createRig(p: CharacterPalette, variant: RigVariant = 'RIN'): Rig
     add(knee, sphere(0.026, 10, 8), p.topDark, [0, -0.410, -0.075], { scale: [1.1, 0.7, 0.7] });
   }
 
+  // ── 形象个性化：共享骨架之上，各自追加专属装备与剪影网格 ────────────────
+  // 只新增挂在现有 joint 上的网格，绝不改关节层级 / 局部坐标 / 马尾链（骨架指纹契约）。
+  // 绯翎走轻锐路线：细长收尖的飘带、腕刃、腰间菱形饰片与靴侧翼片，全用细锥 / 低面菱形，
+  // 三角面增量刻意压小；岳铮走厚重路线：大面数甲片 / 方形拳套 / 宽腰带，增量明显更大，
+  // 让两人三角面差继续拉大而不是收敛。
+  if (variant === 'RIN') {
+    // ① 细长飘带：后脑发束根部与肩后各甩一对收尖飘带，尖端锐利、向两侧外张
+    for (const s of [-1, 1]) {
+      add(joints.hair, hairStrand(0.46, 0.018, 0.05), p.trim,
+        [s * 0.020, -0.10, -0.02], { rot: [Math.PI, 0, s * 0.46] });
+      add(chest, hairStrand(0.30, 0.014, 0.04), p.top,
+        [s * 0.150, 0.02, -0.09], { rot: [Math.PI, 0, s * 0.70] });
+    }
+    // ② 腰间菱形饰片：高腰前侧三枚酸绿宝石（4 面经线 × 2 面纬线的低面球即菱形）
+    const gem = sphere(0.032, 4, 2);
+    for (const dx of [-0.088, 0, 0.088]) {
+      add(pelvis, gem, p.trim, [dx, 0.050, 0.150], { scale: [0.75, 1.15, 0.42] });
+    }
+    // ③ 腕刃 / 尖角护腕 + ④ 靴侧翼片：前臂与脚踝各挑出一枚锐角
+    for (const side of ['L', 'R'] as const) {
+      const s = side === 'L' ? -1 : 1;
+      const elbow = joints[`elbow${side}`];
+      const knee = joints[`knee${side}`];
+      add(elbow, hairStrand(0.19, 0.026, 0.02), p.trim,
+        [s * 0.056, -0.170, 0.055], { rot: [Math.PI / 2, 0, -s * 0.18] });
+      add(elbow, hairStrand(0.085, 0.022, 0.01), p.topDark,
+        [s * 0.060, -0.245, 0.010], { rot: [0, 0, -s * 1.25] });
+      add(knee, hairStrand(0.13, 0.020, 0.02), p.trim,
+        [s * 0.070, -0.360, 0.025], { rot: [0, 0, -s * 1.9] });
+    }
+  } else {
+    // 宽腰带 + 扣环：柱带束腰，正面一枚粉色环扣嵌蓝芯
+    const beltBand = cached('wideBelt', () => new THREE.CylinderGeometry(0.168, 0.168, 0.085, 20));
+    add(pelvis, beltBand, p.topDark, [0, 0.075, 0], { scale: [1, 1, 0.84], outline: 1.04 });
+    decal(pelvis, ring(0.040, 0.011), p.trim, [0, 0.075, 0.150]);
+    add(pelvis, sphere(0.032, 4, 2), p.gloves, [0, 0.075, 0.162], { scale: [0.6, 0.6, 0.6] });
+    // 胸甲横向纹路：三道加厚横棱叠在上胸前
+    for (let i = 0; i < 3; i++) {
+      add(torso, stroke(0.27 - i * 0.01, 0.011), p.topDark,
+        [0, 0.39 + i * 0.05, 0.168], { rot: [0, 0, Math.PI / 2] });
+    }
+    // 四棱柱拳套：4 段圆柱即方柱，避免引入 BoxGeometry 推高 boxes 计数
+    const sqGauntlet = cached('gauntlet', () => new THREE.CylinderGeometry(0.074, 0.070, 0.092, 4));
+    for (const side of ['L', 'R'] as const) {
+      const s = side === 'L' ? -1 : 1;
+      const shoulder = joints[`shoulder${side}`];
+      const elbow = joints[`elbow${side}`];
+      const hip = joints[`hip${side}`];
+      // 更外扩的多层护肩：再加一层外扩甲片与一枚外挑尖角
+      add(shoulder, sphere(0.104, 16, 12), p.topDark,
+        [s * 0.030, 0.034, -0.006], { scale: [1.28, 0.46, 1.06], outline: 1.04 });
+      add(shoulder, hairStrand(0.10, 0.030, 0.01), p.trim,
+        [s * 0.120, 0.050, -0.006], { rot: [0, 0, -s * 1.35] });
+      // 加厚方形拳套：方柱本体 + 前指节方块 + 侧铆钉
+      add(elbow, sqGauntlet, p.topDark, [0, -0.300, 0.010],
+        { scale: [1, 0.9, 1.12], rot: [0, Math.PI / 4, 0], outline: 1.05 });
+      add(elbow, sphere(0.052, 12, 10), p.gloves, [0, -0.312, 0.060], { scale: [1.1, 0.8, 0.7] });
+      add(elbow, sphere(0.014, 8, 6), p.trim, [s * 0.050, -0.292, 0.075]);
+      // 腿侧护甲片：大腿外侧一片竖长暗甲
+      add(hip, sphere(0.070, 14, 10), p.topDark,
+        [s * 0.104, -0.150, 0.020], { scale: [0.5, 1.5, 1.0], outline: 1.04 });
+    }
+  }
+
   const shadow = new THREE.Mesh(
     new THREE.CircleGeometry(0.44, 24),
     new THREE.MeshBasicMaterial({ color: 0x04050b, transparent: true, opacity: 0.42, depthWrite: false }),

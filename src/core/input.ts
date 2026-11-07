@@ -1,4 +1,4 @@
-import type { ButtonId } from './frames';
+import type { ButtonId, CommandId } from './frames';
 
 export interface InputFrame {
   dir: -1 | 0 | 1;
@@ -12,6 +12,12 @@ export interface InputFrame {
    * 可选字段：EMPTY_INPUT 与既有单测构造的中性帧不受影响。
    */
   qcf?: 1 | -1;
+  /** M3：本帧识别出的通用指令（按长度降序，超杀指令优先）。 */
+  commands?: CommandId[];
+  /** M3：同一帧按下 LP + HP → MAX 爆气。 */
+  max?: boolean;
+  /** M3：同一帧按下 LP + HK 且方向朝后 → 紧急回避。 */
+  evade?: boolean;
 }
 
 export const EMPTY_INPUT: InputFrame = {
@@ -47,6 +53,72 @@ export function detectQcf(history: readonly InputFrame[], frame: InputFrame): 1 
   return null;
 }
 
+// ── M3 通用指令匹配器 ───────────────────────────────────────────────────────
+/**
+ * 方向用 KOF 数字方位表示，且一律相对 facing：6 = 前，4 = 后，3 = 下前，
+ * 1 = 下后，2 = 下，5 = 中立，8 = 跳。相对化放在 Match（它知道 facing），
+ * 输入层因此与角色站位解耦，AI 也能直接产出指令 id。
+ */
+export interface CommandDef {
+  id: CommandId;
+  seq: number[];
+  /** 有效输入窗口（逻辑帧）；长指令给更宽的窗口。 */
+  window: number;
+}
+
+/** 按长度降序：一次摇杆若同时满足多个指令，超杀指令优先被 Fighter 选中。 */
+export const COMMANDS: readonly CommandDef[] = [
+  { id: '236236', seq: [2, 3, 6, 2, 3, 6], window: 34 },
+  { id: '41236', seq: [4, 1, 2, 3, 6], window: 30 },
+  { id: '236', seq: [2, 3, 6], window: 20 },
+  { id: '214', seq: [2, 1, 4], window: 20 },
+  { id: '623', seq: [6, 2, 3], window: 20 },
+];
+
+/** 把一帧输入归约成相对 facing 的数字方位。 */
+export function toNotation(frame: InputFrame, facing: 1 | -1 = 1): number {
+  if (frame.jump) return 8;
+  const rel = frame.dir === 0 ? 0 : (frame.dir === facing ? 1 : -1);
+  if (frame.down) return rel === 0 ? 2 : (rel === 1 ? 3 : 1);
+  if (rel === 0) return 5;
+  return rel === 1 ? 6 : 4;
+}
+
+/** 倒序子序列匹配：允许按住方向产生的重复帧，符合格斗游戏的宽松输入。 */
+function matchesPattern(seq: readonly number[], pattern: readonly number[]): boolean {
+  let j = pattern.length - 1;
+  for (let i = seq.length - 1; i >= 0 && j >= 0; i--) {
+    if (seq[i] === pattern[j]) j--;
+  }
+  return j < 0;
+}
+
+/**
+ * 识别本帧收尾的所有指令。要求本帧有攻击键（KOF 的指令都以按键收尾），
+ * 且序列末尾落在窗口内。history 是 Match 维护的相对方位历史（不含本帧）。
+ */
+export function detectCommands(
+  history: readonly number[], frame: InputFrame, facing: 1 | -1,
+): CommandId[] {
+  if (frame.buttons.length === 0 || frame.commands) return frame.commands ?? [];
+  const seq = [...history, toNotation(frame, facing)];
+  const found: CommandId[] = [];
+  for (const def of COMMANDS) {
+    const window = seq.slice(-def.window);
+    if (matchesPattern(window, def.seq)) found.push(def.id);
+  }
+  return found;
+}
+
+/** 把数字方位还原成一帧输入，供触屏 / 手柄的一键指令宏使用。 */
+export function notationFrame(n: number, facing: 1 | -1, buttons: ButtonId[] = []): InputFrame {
+  const dir = (n === 6 || n === 3 ? facing : n === 4 || n === 1 ? -facing : 0) as -1 | 0 | 1;
+  return {
+    dir, jump: n === 8, down: n === 1 || n === 2 || n === 3,
+    guard: false, buttons,
+  };
+}
+
 /** 所有输入设备最终都归约成这 8 个角色，纯逻辑层不认识键盘 / 触屏 / 手柄。 */
 export type InputRole = 'left' | 'right' | 'up' | 'down' | 'LP' | 'HP' | 'LK' | 'HK';
 /** 分来源持有角色：多设备同时按同一个方向时，松开其中一个不会误清另一个。 */
@@ -76,7 +148,7 @@ export class InputBuffer {
   private readonly held = new Map<InputSource, Set<InputRole>>();
   private fresh: InputRole[] = [];
   private history: InputFrame[] = [];
-  /** 移动端 236 快捷键排队的脚本帧，由 sample() 逐帧吐出，保持纯逻辑可复现。 */
+  /** 移动端 / 手柄的一键指令宏排队的脚本帧，由 sample() 逐帧吐出，保持纯逻辑可复现。 */
   private macro: InputFrame[] = [];
   private started = false;
   onFirstInteraction: (() => void) | null = null;
@@ -141,6 +213,16 @@ export class InputBuffer {
     ];
   }
 
+  /** 通用一键指令宏：把指令序列排成逐帧输入，走与手摇相同的识别链路。 */
+  queueCommand(id: CommandId, facing: 1 | -1, button: ButtonId = 'HP'): void {
+    const def = COMMANDS.find((c) => c.id === id);
+    if (!def) return;
+    this.signal();
+    this.fresh.length = 0;
+    this.macro = def.seq.map((n, i) =>
+      notationFrame(n, facing, i === def.seq.length - 1 ? [button] : []));
+  }
+
   get macroPending(): boolean { return this.macro.length > 0; }
 
   /** 自检探针：当前所有来源合并后的按住角色。 */
@@ -186,7 +268,11 @@ export class InputBuffer {
     const down = this.roleHeld('down');
     // 防御不再由「下蹲」隐式触发：键盘侧按住后方向即为防御请求，
     // 由 Fighter 结合 facing 推导站防/蹲防；guard 保留给 AI 显式举防。
-    const frame: InputFrame = { dir, jump, down, guard: false, buttons };
+    const frame: InputFrame = {
+      dir, jump, down, guard: false, buttons,
+      max: buttons.includes('LP') && buttons.includes('HP'),
+      evade: buttons.includes('LP') && buttons.includes('HK'),
+    };
     this.history.push(frame);
     if (this.history.length > 12) this.history.shift();
     return frame;

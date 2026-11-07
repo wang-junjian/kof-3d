@@ -1,17 +1,18 @@
 import * as THREE from 'three';
 import './style.css';
 import { FixedLoop } from './core/loop';
-import { InputBuffer, QCF_WINDOW } from './core/input';
+import { InputBuffer, QCF_WINDOW, COMMANDS } from './core/input';
 import { clampArena, setArenaHalf } from './core/hitbox';
 import { Match } from './core/match';
-import { MOVES, SUPER_COST, type MoveId } from './core/frames';
+import { BASE_MOVES, MOVES, SUPER_COST, type CharId, type MoveId } from './core/frames';
+import { CHARACTERS } from './core/characters';
 import type { FighterState } from './core/state';
 import { AIController, type Difficulty } from './fighter/AI';
 import { createRig, FEI, RIN, type JointName } from './fighter/rig';
 import { RigView } from './fighter/RigView';
 import { loadVrmViews, VrmView } from './fighter/VrmView';
 import type { CharacterView } from './fighter/CharacterView';
-import { Animator, sampleAttackTags, type AnimDebug } from './fighter/Animator';
+import { Animator, sampleAttackTags, setMotionOverride, type AnimDebug } from './fighter/Animator';
 import { Stage } from './view/Stage';
 import { GameCamera, type CameraDebug, type FramingProbe } from './view/Camera';
 import { Fx, type FxProbe } from './view/Fx';
@@ -46,6 +47,9 @@ interface KofSnapshot {
   bootHidden: boolean;
   characterMode: string;
   vrmBones: number;
+  /** M3：两名角色的中文名与 MAX 爆气状态。 */
+  characterNames: [string, string];
+  maxActive: [boolean, boolean];
   difficulty: Difficulty;
   debug: boolean;
   debugBoxes: number;
@@ -90,6 +94,14 @@ interface KofApi {
   moves: typeof MOVES;
   /** M2 调参探针：自检从这里读消耗与窗口，避免脚本里硬编码第二份数值。 */
   config: { superCost: number; qcfWindow: number };
+  /** M3：两人共用的基础招式清单，镜像 / 伸展契约只对它们做严格跨角色比对。 */
+  baseMoves: readonly MoveId[];
+  /** M3：通用指令定义表，自检据此生成手摇输入，不再手写第二份序列。 */
+  commands: typeof COMMANDS;
+  /** M3：角色定义（中文名、指令表、取消图、动作风格）。 */
+  characters: typeof CHARACTERS;
+  /** M3：临时冻结两人动作风格以验证几何镜像；null 恢复各自风格。 */
+  setMotionOverride: (id: CharId | 'none' | null) => void;
   /** 调试钩子：冻结逻辑、摆出超必杀发力帧并触发全部专属演出。 */
   showSuper: () => void;
   /** 切换 AI 难度；同步刷新 HUD 标签。 */
@@ -198,7 +210,7 @@ const ai = new AIController();
 const match = new Match(ai, {
   onHit: (e) => {
     hitCount++;
-    const isSuper = e.move.id === 'SUPER';
+    const isSuper = e.move.id === 'SUPER' || e.move.command === '236236';
     const heavy = isSuper || e.move.damage >= 9;
     const facing = e.attacker.facing;
     fx.hit(e.x, e.y, e.blocked, heavy, e.guardBreak);
@@ -233,7 +245,8 @@ const match = new Match(ai, {
     hud.flash('ko');
     gameCamera.ko((match.p1.x + match.p2.x) / 2);
   },
-  onMatchEnd: (winner) => hud.showWinner(winner === 0 ? 'RIN' : 'FEI'),
+  onMatchEnd: (winner) => hud.showWinner(
+    winner === 0 ? CHARACTERS.FEILING.name : CHARACTERS.YUEZHENG.name),
   onAnnounce: (text) => {
     hud.announce(text);
     if (text === 'FIGHT') sfx.announce('fight');
@@ -290,6 +303,9 @@ input.onFirstInteraction = () => {
 const controls = new Controls(document.body, input, {
   facing: () => (match.p1.facing >= 0 ? 1 : -1),
   canMacro: () => match.phase === 'fight' && match.hitstop === 0,
+  // 同一个一键宏：POW 不足半槽摇 236 普通必杀，攒够则升级成 236236 超必杀。
+  // 不新增键位，也不在输入层写死第二份数值。
+  macroCommand: () => (match.p1.meter >= SUPER_COST ? '236236' : '236'),
 });
 
 let time = 0;
@@ -327,10 +343,11 @@ const loop = new FixedLoop(
         }
         prevStrike[i] = striking;
         // M2 超必杀起招：聚气柔光 + 酸绿提示，让「攒满 → 消费」有即时反馈
-        const superActive = f.move?.id === 'SUPER';
+        const superActive = f.move?.id === 'SUPER' || f.move?.command === '236236';
         if (superActive && !prevSuper[i]) {
           fx.glow(f.x + f.facing * 0.35, 1.15, true, false);
-          hud.superAlert(`${i === 0 ? 'RIN' : 'FEI'} · SUPER`);
+          const who = i === 0 ? CHARACTERS.FEILING.name : CHARACTERS.YUEZHENG.name;
+          hud.superAlert(`${who} · SUPER`);
         }
         prevSuper[i] = superActive;
       }
@@ -439,12 +456,14 @@ const showSuper = (): void => {
   poseLock = true;
   const p1 = match.p1;
   const p2 = match.p2;
+  // 摆拍用玩家角色的真实超必杀（绯翎·天翔），而不是仅供兼容链路的旧 SUPER。
+  const superMove = MOVES[CHARACTERS.FEILING.superMove];
   match.hitstop = 0;
   match.phase = 'fight';
   p1.state = 'attack';
-  p1.move = MOVES.SUPER;
-  p1.moveFrame = MOVES.SUPER.startup;
-  p1.stateFrame = MOVES.SUPER.startup;
+  p1.move = superMove;
+  p1.moveFrame = superMove.startup;
+  p1.stateFrame = superMove.startup;
   p1.hitId++;
   p1.x = -0.72; p1.facing = 1; p1.y = 0; p1.vy = 0; p1.vx = 0;
   p1.airborne = false; p1.flash = 0; p1.combo = 3; p1.comboTimer = 40;
@@ -474,6 +493,10 @@ window.__kof = {
   match,
   moves: MOVES,
   config: { superCost: SUPER_COST, qcfWindow: QCF_WINDOW },
+  baseMoves: BASE_MOVES,
+  commands: COMMANDS,
+  characters: CHARACTERS,
+  setMotionOverride,
   showSuper,
   setDifficulty: (d) => { ai.setDifficulty(d); hud.setDifficulty(d); },
   setDebug: (on) => debug.setEnabled(on),
@@ -540,6 +563,8 @@ window.__kof = {
     bootHidden: boot.classList.contains('gone'),
     characterMode,
     vrmBones,
+    characterNames: [match.p1.char.name, match.p2.char.name],
+    maxActive: [match.p1.isMax, match.p2.isMax],
     difficulty: ai.level,
     debug: debug.enabled,
     debugBoxes: debug.count,

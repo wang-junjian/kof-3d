@@ -1,6 +1,9 @@
-import { ROUND_SECONDS, type ButtonId, type MoveDef } from './frames';
-import { EMPTY_INPUT, QCF_WINDOW, detectQcf, type InputFrame } from './input';
-import { boxCenterX, boxCenterY, clampArena, overlaps, separate } from './hitbox';
+import { ROUND_SECONDS, type ButtonId, type CommandId, type MoveDef } from './frames';
+import { characterFor } from './characters';
+import {
+  EMPTY_INPUT, QCF_WINDOW, detectQcf, detectCommands, toNotation, type InputFrame,
+} from './input';
+import { boxCenterX, boxCenterY, clampArena, overlaps, separate, worldBox } from './hitbox';
 import type { AIController } from '../fighter/AI';
 import { Fighter, type HitEvent } from '../fighter/Fighter';
 
@@ -31,15 +34,21 @@ export class Match {
   private readonly buffered: ButtonId[] = [];
   /** 236 指令的输入历史（含顿帧——顿帧里摇的指令必须算数），长度上限 QCF_WINDOW。 */
   private readonly inputHistory: InputFrame[] = [];
+  /** M3：相对 facing 的数字方位历史，供通用指令匹配器倒序匹配。 */
+  private readonly notationHistory: number[] = [];
   /** 顿帧期间识别出的 236：解冻后随第一个逻辑帧一起交给状态机。 */
   private pendingQcf: 1 | -1 | null = null;
+  /** 顿帧期间识别出的通用指令：同样不能丢，否则「打中后接必杀」永远做不出来。 */
+  private readonly pendingCommands: CommandId[] = [];
 
   constructor(
     private readonly ai: AIController,
     private readonly cb: MatchCallbacks,
   ) {
-    this.p1 = new Fighter(0, 'RIN', -1.5);
-    this.p2 = new Fighter(1, 'FEI', 1.5);
+    this.p1 = new Fighter(0, characterFor(0), -1.5);
+    this.p2 = new Fighter(1, characterFor(1), 1.5);
+    this.p1.foe = this.p2;
+    this.p2.foe = this.p1;
     this.beginRound(1);
   }
 
@@ -63,7 +72,9 @@ export class Match {
   clearTransient(): void {
     this.buffered.length = 0;
     this.inputHistory.length = 0;
+    this.notationHistory.length = 0;
     this.pendingQcf = null;
+    this.pendingCommands.length = 0;
   }
 
   private beginRound(n: number): void {
@@ -94,7 +105,8 @@ export class Match {
       // 顿帧里也要采样方向：玩家在命中停顿中摇完的 236 不能丢，
       // 否则「打中后接必杀」这条最基本的连段永远做不出来。
       const frozen = this.track(playerInput);
-      if (frozen) this.pendingQcf = frozen;
+      if (frozen.qcf) this.pendingQcf = frozen.qcf;
+      if (frozen.commands.length) this.pendingCommands.push(...frozen.commands);
       return true;
     }
     const input: InputFrame = this.buffered.length > 0
@@ -133,9 +145,15 @@ export class Match {
     // 解冻帧是真实逻辑帧，必须先无条件记入历史（旧 ?? 短路会漏记这一帧），
     // 再取指令值：pendingQcf（顿帧里已识别出的 236）优先，track 的返回值兜底。
     const tracked = this.track(input);
-    const qcf = this.pendingQcf ?? tracked;
+    const qcf = this.pendingQcf ?? tracked.qcf;
+    const commands = [...this.pendingCommands, ...tracked.commands];
     this.pendingQcf = null;
-    const command: InputFrame = qcf ? { ...input, qcf } : input;
+    this.pendingCommands.length = 0;
+    const command: InputFrame = {
+      ...input,
+      ...(qcf ? { qcf } : {}),
+      ...(commands.length ? { commands } : {}),
+    };
     this.p1.update(command);
     this.p2.update(aiInput);
     this.resolvePush();
@@ -149,14 +167,19 @@ export class Match {
   }
 
   /**
-   * 把一帧输入记入 236 历史，并返回该帧自身识别出的指令（历史不含本帧）。
-   * 顿帧与逻辑帧共用同一条判定链，手摇、触屏宏、AI 显式输入都走这里。
+   * 把一帧输入记入历史，并返回该帧自身识别出的指令（历史不含本帧）。
+   * 顿帧与逻辑帧共用同一条判定链，手摇、触屏宏、AI 显式指令都走这里。
+   * 通用指令用「相对 facing 的数字方位」匹配，因此镜像站位无需两套定义。
    */
-  private track(frame: InputFrame): 1 | -1 | null {
+  private track(frame: InputFrame): { qcf: 1 | -1 | null; commands: CommandId[] } {
+    const facing = this.p1.facing;
     const qcf = detectQcf(this.inputHistory, frame);
+    const commands = frame.commands ?? detectCommands(this.notationHistory, frame, facing);
     this.inputHistory.push(frame);
     if (this.inputHistory.length > QCF_WINDOW) this.inputHistory.shift();
-    return qcf;
+    this.notationHistory.push(toNotation(frame, facing));
+    if (this.notationHistory.length > 34) this.notationHistory.shift();
+    return { qcf, commands: [...commands] };
   }
 
   /**
@@ -197,16 +220,21 @@ export class Match {
       [this.p1, this.p2],
       [this.p2, this.p1],
     ];
-    type Shot = { atk: Fighter; def: Fighter; move: MoveDef; hx: number; hy: number };
+    type Shot = {
+      atk: Fighter; def: Fighter; move: MoveDef;
+      hitIndex: number; hx: number; hy: number;
+    };
     const shots: Shot[] = [];
     for (const [atk, def] of pairs) {
-      const hb = atk.activeHitbox();
-      const move = atk.move;
-      if (!hb || !move) continue;
+      const hit = atk.currentHit();
+      if (!hit) continue;
+      const hb = worldBox(hit.box, atk.x, atk.y, atk.facing);
+      // 紧急回避的无敌帧直接跳过配对，比在 receiveHit 里回滚状态更干净。
+      if (def.invuln > 0) continue;
       const hurt = def.hurtbox();
       if (!overlaps(hb, hurt)) continue;
       shots.push({
-        atk, def, move,
+        atk, def, move: hit.move, hitIndex: hit.hitIndex,
         hx: boxCenterX(hb, hurt),
         hy: boxCenterY(hb, hurt),
       });
@@ -214,6 +242,7 @@ export class Match {
 
     for (const s of shots) {
       const ev = s.def.receiveHit(s.move, s.atk, s.hx, s.hy);
+      s.atk.markHit(s.hitIndex);
       const stop = ev.blocked
         ? Math.max(2, Math.floor(s.move.hitstop / 2))
         : s.move.hitstop;
